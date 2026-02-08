@@ -193,9 +193,43 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 									p++
 								}
 							}
-						case "file":
-							filename := item.Get("file.filename").String()
-							fileData := item.Get("file.file_data").String()
+					case "tool_result":
+						// Anthropic format: {"type":"tool_result","tool_use_id":"...","content":"..."}
+						toolUseID := item.Get("tool_use_id").String()
+						toolName := tcID2Name[toolUseID]
+						if toolName == "" {
+							toolName = "unknown"
+						}
+						toolResultNode := []byte(`{"role":"user","parts":[]}`)
+						trContent := item.Get("content")
+						var resultText string
+						if trContent.Type == gjson.String {
+							resultText = trContent.String()
+						} else if trContent.IsArray() {
+							// content can be an array of {type:"text", text:"..."} blocks
+							var sb strings.Builder
+							for _, block := range trContent.Array() {
+								if block.Get("type").String() == "text" {
+									sb.WriteString(block.Get("text").String())
+								}
+							}
+							resultText = sb.String()
+						} else {
+							resultText = trContent.Raw
+						}
+						toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.id", toolUseID)
+						toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.name", toolName)
+						if gjson.Valid(resultText) && gjson.Parse(resultText).IsObject() {
+							toolResultNode, _ = sjson.SetRawBytes(toolResultNode, "parts.0.functionResponse.response.result", []byte(resultText))
+						} else {
+							toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.response.result", resultText)
+						}
+						out, _ = sjson.SetRawBytes(out, "request.contents.-1", toolResultNode)
+						// Don't add to the current user node, tool_result is a separate content entry
+						continue
+					case "file":
+						filename := item.Get("file.filename").String()
+						fileData := item.Get("file.file_data").String()
 							ext := ""
 							if sp := strings.Split(filename, "."); len(sp) > 1 {
 								ext = sp[len(sp)-1]
@@ -217,36 +251,60 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 				if content.Type == gjson.String && content.String() != "" {
 					node, _ = sjson.SetBytes(node, "parts.-1.text", content.String())
 					p++
-				} else if content.IsArray() {
-					// Assistant multimodal content (e.g. text + image) -> single model content with parts
-					for _, item := range content.Array() {
-						switch item.Get("type").String() {
-						case "text":
-							text := item.Get("text").String()
-							if text != "" {
-								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".text", text)
-							}
-							p++
-						case "image_url":
-							// If the assistant returned an inline data URL, preserve it for history fidelity.
-							imageURL := item.Get("image_url.url").String()
-							if len(imageURL) > 5 { // expect data:...
-								pieces := strings.SplitN(imageURL[5:], ";", 2)
-								if len(pieces) == 2 && len(pieces[1]) > 7 {
-									mime := pieces[0]
-									data := pieces[1][7:]
-									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.mime_type", mime)
-									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.data", data)
-									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".thoughtSignature", geminiCLIFunctionThoughtSignature)
-									p++
-								}
+			} else if content.IsArray() {
+				// Assistant multimodal content (e.g. text + image + tool_use) -> single model content with parts
+				anthropicToolUseIDs := make([]string, 0)
+				for _, item := range content.Array() {
+					switch item.Get("type").String() {
+					case "text":
+						text := item.Get("text").String()
+						if text != "" {
+							node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".text", text)
+						}
+						p++
+					case "tool_use":
+						// Anthropic format: {"type":"tool_use","id":"...","name":"...","input":{...}}
+						fid := item.Get("id").String()
+						fname := item.Get("name").String()
+						finput := item.Get("input")
+						node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".functionCall.id", fid)
+						node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".functionCall.name", fname)
+						if finput.Exists() && finput.IsObject() {
+							node, _ = sjson.SetRawBytes(node, "parts."+itoa(p)+".functionCall.args", []byte(finput.Raw))
+						} else {
+							node, _ = sjson.SetRawBytes(node, "parts."+itoa(p)+".functionCall.args", []byte("{}"))
+						}
+						node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".thoughtSignature", geminiCLIFunctionThoughtSignature)
+						p++
+						if fid != "" {
+							anthropicToolUseIDs = append(anthropicToolUseIDs, fid)
+							tcID2Name[fid] = fname
+						}
+					case "image_url":
+						// If the assistant returned an inline data URL, preserve it for history fidelity.
+						imageURL := item.Get("image_url.url").String()
+						if len(imageURL) > 5 { // expect data:...
+							pieces := strings.SplitN(imageURL[5:], ";", 2)
+							if len(pieces) == 2 && len(pieces[1]) > 7 {
+								mime := pieces[0]
+								data := pieces[1][7:]
+								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.mime_type", mime)
+								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.data", data)
+								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".thoughtSignature", geminiCLIFunctionThoughtSignature)
+								p++
 							}
 						}
 					}
 				}
+				// If Anthropic-format tool_use was found, emit the node and skip OpenAI tool_calls handling
+				if len(anthropicToolUseIDs) > 0 {
+					out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
+					continue
+				}
+			}
 
-				// Tool calls -> single model content with functionCall parts
-				tcs := m.Get("tool_calls")
+			// Tool calls -> single model content with functionCall parts
+			tcs := m.Get("tool_calls")
 				if tcs.IsArray() {
 					fIDs := make([]string, 0)
 					for _, tc := range tcs.Array() {
