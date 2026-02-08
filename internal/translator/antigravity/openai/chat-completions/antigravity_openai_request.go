@@ -193,42 +193,40 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 									p++
 								}
 							}
-					case "tool_result":
-						// Anthropic format: {"type":"tool_result","tool_use_id":"...","content":"..."}
-						toolUseID := item.Get("tool_use_id").String()
-						toolName := tcID2Name[toolUseID]
-						if toolName == "" {
-							toolName = "unknown"
-						}
-						toolResultNode := []byte(`{"role":"user","parts":[]}`)
-						trContent := item.Get("content")
-						var resultText string
-						if trContent.Type == gjson.String {
-							resultText = trContent.String()
-						} else if trContent.IsArray() {
-							// content can be an array of {type:"text", text:"..."} blocks
-							var sb strings.Builder
-							for _, block := range trContent.Array() {
-								if block.Get("type").String() == "text" {
-									sb.WriteString(block.Get("text").String())
-								}
+						case "tool_result":
+							// Anthropic format: {"type":"tool_result","tool_use_id":"...","content":"..."}
+							toolUseID := item.Get("tool_use_id").String()
+							toolName := tcID2Name[toolUseID]
+							if toolName == "" {
+								toolName = "unknown"
 							}
-							resultText = sb.String()
-						} else {
-							resultText = trContent.Raw
-						}
-						toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.id", toolUseID)
-						toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.name", toolName)
-						if gjson.Valid(resultText) && gjson.Parse(resultText).IsObject() {
-							toolResultNode, _ = sjson.SetRawBytes(toolResultNode, "parts.0.functionResponse.response.result", []byte(resultText))
-						} else {
-							toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.response.result", resultText)
-						}
-						out, _ = sjson.SetRawBytes(out, "request.contents.-1", toolResultNode)
-						continue
-					case "file":
-						filename := item.Get("file.filename").String()
-						fileData := item.Get("file.file_data").String()
+							toolResultNode := []byte(`{"role":"user","parts":[]}`)
+							trContent := item.Get("content")
+							var resultText string
+							if trContent.Type == gjson.String {
+								resultText = trContent.String()
+							} else if trContent.IsArray() {
+								var sb strings.Builder
+								for _, block := range trContent.Array() {
+									if block.Get("type").String() == "text" {
+										sb.WriteString(block.Get("text").String())
+									}
+								}
+								resultText = sb.String()
+							} else {
+								resultText = trContent.Raw
+							}
+							toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.id", toolUseID)
+							toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.name", toolName)
+							if gjson.Valid(resultText) && gjson.Parse(resultText).IsObject() {
+								toolResultNode, _ = sjson.SetRawBytes(toolResultNode, "parts.0.functionResponse.response.result", []byte(resultText))
+							} else {
+								toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.response.result", resultText)
+							}
+							out, _ = sjson.SetRawBytes(out, "request.contents.-1", toolResultNode)
+						case "file":
+							filename := item.Get("file.filename").String()
+							fileData := item.Get("file.file_data").String()
 							ext := ""
 							if sp := strings.Split(filename, "."); len(sp) > 1 {
 								ext = sp[len(sp)-1]
