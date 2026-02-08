@@ -313,53 +313,73 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 		codeExecutionNodes := make([][]byte, 0)
 		urlContextNodes := make([][]byte, 0)
 		for _, t := range tools.Array() {
+			// Resolve the function definition object: support both OpenAI format
+			// ({"type":"function","function":{...}}) and Anthropic format ({"name":"...","input_schema":{...}}).
+			var fnRaw string
+			var fnResolved bool
 			if t.Get("type").String() == "function" {
 				fn := t.Get("function")
 				if fn.Exists() && fn.IsObject() {
-					fnRaw := fn.Raw
-					if fn.Get("parameters").Exists() {
-						renamed, errRename := util.RenameKey(fnRaw, "parameters", "parametersJsonSchema")
-						if errRename != nil {
-							log.Warnf("Failed to rename parameters for tool '%s': %v", fn.Get("name").String(), errRename)
-							var errSet error
-							fnRaw, errSet = sjson.Set(fnRaw, "parametersJsonSchema.type", "object")
-							if errSet != nil {
-								log.Warnf("Failed to set default schema type for tool '%s': %v", fn.Get("name").String(), errSet)
-								continue
-							}
-							fnRaw, errSet = sjson.SetRaw(fnRaw, "parametersJsonSchema.properties", `{}`)
-							if errSet != nil {
-								log.Warnf("Failed to set default schema properties for tool '%s': %v", fn.Get("name").String(), errSet)
-								continue
-							}
-						} else {
-							fnRaw = renamed
-						}
-					} else {
+					fnRaw = fn.Raw
+					fnResolved = true
+				}
+			} else if t.Get("name").Exists() && (t.Get("input_schema").Exists() || t.Get("description").Exists()) {
+				// Anthropic format: build an OpenAI-like function object from flat fields.
+				fnRaw = `{}`
+				fnRaw, _ = sjson.Set(fnRaw, "name", t.Get("name").String())
+				if desc := t.Get("description"); desc.Exists() {
+					fnRaw, _ = sjson.Set(fnRaw, "description", desc.String())
+				}
+				if schema := t.Get("input_schema"); schema.Exists() && schema.IsObject() {
+					fnRaw, _ = sjson.SetRaw(fnRaw, "parameters", schema.Raw)
+				}
+				fnResolved = true
+			}
+			if fnResolved {
+				if gjson.Get(fnRaw, "parameters").Exists() {
+					renamed, errRename := util.RenameKey(fnRaw, "parameters", "parametersJsonSchema")
+					if errRename != nil {
+						log.Warnf("Failed to rename parameters for tool '%s': %v", gjson.Get(fnRaw, "name").String(), errRename)
 						var errSet error
 						fnRaw, errSet = sjson.Set(fnRaw, "parametersJsonSchema.type", "object")
 						if errSet != nil {
-							log.Warnf("Failed to set default schema type for tool '%s': %v", fn.Get("name").String(), errSet)
+							log.Warnf("Failed to set default schema type for tool '%s': %v", gjson.Get(fnRaw, "name").String(), errSet)
 							continue
 						}
 						fnRaw, errSet = sjson.SetRaw(fnRaw, "parametersJsonSchema.properties", `{}`)
 						if errSet != nil {
-							log.Warnf("Failed to set default schema properties for tool '%s': %v", fn.Get("name").String(), errSet)
+							log.Warnf("Failed to set default schema properties for tool '%s': %v", gjson.Get(fnRaw, "name").String(), errSet)
 							continue
 						}
+					} else {
+						fnRaw = renamed
 					}
-					fnRaw, _ = sjson.Delete(fnRaw, "strict")
-					if !hasFunction {
-						functionToolNode, _ = sjson.SetRawBytes(functionToolNode, "functionDeclarations", []byte("[]"))
-					}
-					tmp, errSet := sjson.SetRawBytes(functionToolNode, "functionDeclarations.-1", []byte(fnRaw))
+				} else {
+					var errSet error
+					fnRaw, errSet = sjson.Set(fnRaw, "parametersJsonSchema.type", "object")
 					if errSet != nil {
-						log.Warnf("Failed to append tool declaration for '%s': %v", fn.Get("name").String(), errSet)
+						log.Warnf("Failed to set default schema type for tool '%s': %v", gjson.Get(fnRaw, "name").String(), errSet)
 						continue
 					}
-					functionToolNode = tmp
-					hasFunction = true
+					fnRaw, errSet = sjson.SetRaw(fnRaw, "parametersJsonSchema.properties", `{}`)
+					if errSet != nil {
+						log.Warnf("Failed to set default schema properties for tool '%s': %v", gjson.Get(fnRaw, "name").String(), errSet)
+						continue
+					}
 				}
+				fnRaw, _ = sjson.Delete(fnRaw, "strict")
+				fnRaw, _ = sjson.Delete(fnRaw, "input_schema")
+				fnRaw, _ = sjson.Delete(fnRaw, "cache_control")
+				if !hasFunction {
+					functionToolNode, _ = sjson.SetRawBytes(functionToolNode, "functionDeclarations", []byte("[]"))
+				}
+				tmp, errSet := sjson.SetRawBytes(functionToolNode, "functionDeclarations.-1", []byte(fnRaw))
+				if errSet != nil {
+					log.Warnf("Failed to append tool declaration for '%s': %v", gjson.Get(fnRaw, "name").String(), errSet)
+					continue
+				}
+				functionToolNode = tmp
+				hasFunction = true
 			}
 			if gs := t.Get("google_search"); gs.Exists() {
 				googleToolNode := []byte(`{}`)
