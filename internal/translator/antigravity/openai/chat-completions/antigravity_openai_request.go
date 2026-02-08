@@ -225,7 +225,6 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 							toolResultNode, _ = sjson.SetBytes(toolResultNode, "parts.0.functionResponse.response.result", resultText)
 						}
 						out, _ = sjson.SetRawBytes(out, "request.contents.-1", toolResultNode)
-						// Don't add to the current user node, tool_result is a separate content entry
 						continue
 					case "file":
 						filename := item.Get("file.filename").String()
@@ -244,7 +243,10 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 						}
 					}
 				}
-				out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
+				// Only add the user node if it has actual parts (skip if all items were tool_result)
+				if p > 0 {
+					out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
+				}
 			} else if role == "assistant" {
 				node := []byte(`{"role":"model","parts":[]}`)
 				p := 0
