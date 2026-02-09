@@ -167,11 +167,12 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 			} else if role == "user" || ((role == "system" || role == "developer") && len(arr) == 1) {
 				// Build single user content node to avoid splitting into multiple contents
 				node := []byte(`{"role":"user","parts":[]}`)
+				p := 0
 				if content.Type == gjson.String {
 					node, _ = sjson.SetBytes(node, "parts.0.text", content.String())
+					p++
 				} else if content.IsArray() {
 					items := content.Array()
-					p := 0
 					for _, item := range items {
 						switch item.Get("type").String() {
 						case "text":
