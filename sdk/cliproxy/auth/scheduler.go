@@ -18,6 +18,7 @@ const (
 	schedulerStrategyCustom schedulerStrategy = iota
 	schedulerStrategyRoundRobin
 	schedulerStrategyFillFirst
+	schedulerStrategyBalancedHash
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -112,6 +113,8 @@ func selectorStrategy(selector Selector) schedulerStrategy {
 	switch selector.(type) {
 	case *FillFirstSelector:
 		return schedulerStrategyFillFirst
+	case *BalancedHashSelector:
+		return schedulerStrategyBalancedHash
 	case nil, *RoundRobinSelector:
 		return schedulerStrategyRoundRobin
 	default:
@@ -695,6 +698,8 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
 		picked = view.pickFirst(predicate)
+	} else if strategy == schedulerStrategyBalancedHash {
+		picked = view.pickBalanced(predicate)
 	} else {
 		picked = view.pickRoundRobin(predicate)
 	}
@@ -873,6 +878,31 @@ func (v *readyView) pickRoundRobin(predicate func(*scheduledAuth) bool) *schedul
 		return entry
 	}
 	return nil
+}
+
+// pickBalanced chooses the highest score candidate deterministically.
+func (v *readyView) pickBalanced(predicate func(*scheduledAuth) bool) *scheduledAuth {
+	if len(v.flat) == 0 {
+		return nil
+	}
+	now := time.Now()
+	var best *scheduledAuth
+	bestScore := -1.0
+	for _, entry := range v.flat {
+		if predicate != nil && !predicate(entry) {
+			continue
+		}
+		score := balancedAuthScore(entry.auth, canonicalModelKey(entry.meta.auth.Provider), canonicalModelKey(entry.meta.auth.Provider), entry.auth.ID, now)
+		if score > bestScore {
+			best = entry
+			bestScore = score
+			continue
+		}
+		if score == bestScore && best != nil && entry != nil && entry.auth != nil && best.auth != nil && strings.Compare(entry.auth.ID, best.auth.ID) < 0 {
+			best = entry
+		}
+	}
+	return best
 }
 
 // pickGroupedRoundRobin rotates across parents first and then within the selected parent.

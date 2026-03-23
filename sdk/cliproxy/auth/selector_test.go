@@ -527,3 +527,58 @@ func TestRoundRobinSelectorPick_MixedVirtualAndNonVirtualFallsBackToFlat(t *test
 		}
 	}
 }
+
+func TestBalancedHashSelectorPick_DeterministicByIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	selector := &BalancedHashSelector{}
+	auths := []*Auth{
+		{ID: "auth-a"},
+		{ID: "auth-b"},
+		{ID: "auth-c"},
+	}
+	opts := cliproxyexecutor.Options{Metadata: map[string]any{"idempotency_key": "same-key"}}
+
+	first, err := selector.Pick(context.Background(), "claude", "test-model", opts, auths)
+	if err != nil {
+		t.Fatalf("first pick error: %v", err)
+	}
+	second, err := selector.Pick(context.Background(), "claude", "test-model", opts, auths)
+	if err != nil {
+		t.Fatalf("second pick error: %v", err)
+	}
+	if first == nil || second == nil {
+		t.Fatalf("pick returned nil auth")
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected deterministic pick, got %s then %s", first.ID, second.ID)
+	}
+}
+
+func TestBalancedHashSelectorPick_RespectsQuotaHealth(t *testing.T) {
+	t.Parallel()
+
+	selector := &BalancedHashSelector{}
+	auths := []*Auth{
+		{
+			ID:    "quota-heavy",
+			Quota: QuotaState{Exceeded: true, BackoffLevel: 6},
+		},
+		{
+			ID:    "healthy",
+			Quota: QuotaState{Exceeded: false},
+		},
+	}
+	opts := cliproxyexecutor.Options{Metadata: map[string]any{"idempotency_key": "quota-key"}}
+
+	got, err := selector.Pick(context.Background(), "claude", "test-model", opts, auths)
+	if err != nil {
+		t.Fatalf("pick error: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("pick returned nil auth")
+	}
+	if got.ID != "healthy" {
+		t.Fatalf("expected healthy auth, got %s", got.ID)
+	}
+}

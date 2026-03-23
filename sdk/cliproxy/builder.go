@@ -215,6 +215,8 @@ func (b *Builder) Build() (*Service, error) {
 		switch strategy {
 		case "fill-first", "fillfirst", "ff":
 			selector = &coreauth.FillFirstSelector{}
+		case "balanced-hash", "balancedhash", "bh":
+			selector = &coreauth.BalancedHashSelector{}
 		default:
 			selector = &coreauth.RoundRobinSelector{}
 		}

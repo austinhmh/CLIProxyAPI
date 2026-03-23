@@ -153,6 +153,9 @@ type Manager struct {
 	// modelPoolOffsets tracks per-auth alias pool rotation state.
 	modelPoolOffsets map[string]int
 
+	// sessionAffinity keeps sticky auth binding per execution session.
+	sessionAffinity map[string]sessionAffinityBinding
+
 	// runtimeConfig stores the latest application config for request-time decisions.
 	// It is initialized in NewManager; never Load() before first Store().
 	runtimeConfig atomic.Value
@@ -163,6 +166,12 @@ type Manager struct {
 	// Auto refresh state
 	refreshCancel    context.CancelFunc
 	refreshSemaphore chan struct{}
+}
+
+type sessionAffinityBinding struct {
+	AuthID   string
+	Provider string
+	ModelKey string
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -181,6 +190,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		auths:            make(map[string]*Auth),
 		providerOffsets:  make(map[string]int),
 		modelPoolOffsets: make(map[string]int),
+		sessionAffinity:  make(map[string]sessionAffinityBinding),
 		refreshSemaphore: make(chan struct{}, refreshMaxConcurrency),
 	}
 	// atomic.Value requires non-nil initial value.
@@ -1221,6 +1231,24 @@ func pinnedAuthIDFromMetadata(meta map[string]any) string {
 	}
 }
 
+func executionSessionIDFromMetadata(meta map[string]any) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	raw, ok := meta[cliproxyexecutor.ExecutionSessionMetadataKey]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch val := raw.(type) {
+	case string:
+		return strings.TrimSpace(val)
+	case []byte:
+		return strings.TrimSpace(string(val))
+	default:
+		return ""
+	}
+}
+
 func publishSelectedAuthMetadata(meta map[string]any, authID string) {
 	if len(meta) == 0 {
 		return
@@ -2032,6 +2060,15 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 	if m == nil || sessionID == "" {
 		return
 	}
+	if sessionID == CloseAllExecutionSessionsID {
+		m.mu.Lock()
+		clear(m.sessionAffinity)
+		m.mu.Unlock()
+	} else {
+		m.mu.Lock()
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+	}
 
 	m.mu.RLock()
 	executors := make([]ProviderExecutor, 0, len(m.executors))
@@ -2130,8 +2167,15 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 }
 
 func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
+	if stickyAuth, stickyExecutor, ok := m.pickStickySingle(provider, model, opts, tried); ok {
+		return stickyAuth, stickyExecutor, nil
+	}
 	if !m.useSchedulerFastPath() {
-		return m.pickNextLegacy(ctx, provider, model, opts, tried)
+		auth, executor, err := m.pickNextLegacy(ctx, provider, model, opts, tried)
+		if err == nil && auth != nil {
+			m.bindSessionAffinity(opts, auth, provider, model)
+		}
+		return auth, executor, err
 	}
 	executor, okExecutor := m.Executor(provider)
 	if !okExecutor {
@@ -2157,6 +2201,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		}
 		m.mu.Unlock()
 	}
+	m.bindSessionAffinity(opts, authCopy, provider, model)
 	return authCopy, executor, nil
 }
 
@@ -2244,8 +2289,15 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 }
 
 func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
+	if stickyAuth, stickyExecutor, stickyProvider, ok := m.pickStickyMixed(providers, model, opts, tried); ok {
+		return stickyAuth, stickyExecutor, stickyProvider, nil
+	}
 	if !m.useSchedulerFastPath() {
-		return m.pickNextMixedLegacy(ctx, providers, model, opts, tried)
+		auth, executor, provider, err := m.pickNextMixedLegacy(ctx, providers, model, opts, tried)
+		if err == nil && auth != nil {
+			m.bindSessionAffinity(opts, auth, provider, model)
+		}
+		return auth, executor, provider, err
 	}
 
 	eligibleProviders := make([]string, 0, len(providers))
@@ -2292,7 +2344,150 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		}
 		m.mu.Unlock()
 	}
+	m.bindSessionAffinity(opts, authCopy, providerKey, model)
 	return authCopy, executor, providerKey, nil
+}
+
+func (m *Manager) bindSessionAffinity(opts cliproxyexecutor.Options, auth *Auth, provider, model string) {
+	if m == nil || auth == nil {
+		return
+	}
+	sessionID := executionSessionIDFromMetadata(opts.Metadata)
+	if sessionID == "" {
+		return
+	}
+	modelKey := canonicalModelKey(model)
+	m.mu.Lock()
+	if m.sessionAffinity == nil {
+		m.sessionAffinity = make(map[string]sessionAffinityBinding)
+	}
+	m.sessionAffinity[sessionID] = sessionAffinityBinding{
+		AuthID:   strings.TrimSpace(auth.ID),
+		Provider: strings.ToLower(strings.TrimSpace(provider)),
+		ModelKey: modelKey,
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) pickStickySingle(provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, bool) {
+	sessionID := executionSessionIDFromMetadata(opts.Metadata)
+	if sessionID == "" {
+		return nil, nil, false
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	modelKey := canonicalModelKey(model)
+	now := time.Now()
+
+	m.mu.Lock()
+	binding, ok := m.sessionAffinity[sessionID]
+	if !ok || strings.TrimSpace(binding.AuthID) == "" {
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	if binding.Provider != "" && binding.Provider != provider {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	auth := m.auths[binding.AuthID]
+	if auth == nil || auth.Disabled || strings.ToLower(strings.TrimSpace(auth.Provider)) != provider {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	if len(tried) > 0 {
+		if _, used := tried[auth.ID]; used {
+			m.mu.Unlock()
+			return nil, nil, false
+		}
+	}
+	if blocked, _, _ := isAuthBlockedForModel(auth, model, now); blocked {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	registryRef := registry.GetGlobalRegistry()
+	if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(auth.ID, modelKey) {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	executor := m.executors[provider]
+	if executor == nil {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	authCopy := auth.Clone()
+	m.mu.Unlock()
+	return authCopy, executor, true
+}
+
+func (m *Manager) pickStickyMixed(providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, bool) {
+	sessionID := executionSessionIDFromMetadata(opts.Metadata)
+	if sessionID == "" {
+		return nil, nil, "", false
+	}
+	allowed := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		key := strings.ToLower(strings.TrimSpace(provider))
+		if key == "" {
+			continue
+		}
+		allowed[key] = struct{}{}
+	}
+	modelKey := canonicalModelKey(model)
+	now := time.Now()
+
+	m.mu.Lock()
+	binding, ok := m.sessionAffinity[sessionID]
+	if !ok || strings.TrimSpace(binding.AuthID) == "" {
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	if binding.Provider == "" {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	if _, okAllowed := allowed[binding.Provider]; !okAllowed {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	auth := m.auths[binding.AuthID]
+	if auth == nil || auth.Disabled || strings.ToLower(strings.TrimSpace(auth.Provider)) != binding.Provider {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	if len(tried) > 0 {
+		if _, used := tried[auth.ID]; used {
+			m.mu.Unlock()
+			return nil, nil, "", false
+		}
+	}
+	if blocked, _, _ := isAuthBlockedForModel(auth, model, now); blocked {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	registryRef := registry.GetGlobalRegistry()
+	if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(auth.ID, modelKey) {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	executor := m.executors[binding.Provider]
+	if executor == nil {
+		delete(m.sessionAffinity, sessionID)
+		m.mu.Unlock()
+		return nil, nil, "", false
+	}
+	authCopy := auth.Clone()
+	provider := binding.Provider
+	m.mu.Unlock()
+	return authCopy, executor, provider, true
 }
 
 func (m *Manager) persist(ctx context.Context, auth *Auth) error {
