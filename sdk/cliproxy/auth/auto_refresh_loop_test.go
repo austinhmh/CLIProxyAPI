@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -32,33 +33,75 @@ func setRefreshLeadFactory(t *testing.T, provider string, factory func() *time.D
 	})
 }
 
-func TestNextRefreshCheckAt_DisabledUnschedule(t *testing.T) {
-	now := time.Date(2026, 4, 12, 0, 0, 0, 0, time.UTC)
-	expiry := now.Add(time.Hour)
-	lead := 10 * time.Minute
+func TestDisabledAuthStopsAutomaticRefresh(t *testing.T) {
+	now := time.Now().UTC()
+	expiry := now.Add(30 * time.Minute)
+	lead := time.Hour
 	setRefreshLeadFactory(t, "disabled-schedule", func() *time.Duration {
-		d := lead
-		return &d
+		refreshLead := lead
+		return &refreshLead
 	})
 
-	auth := &Auth{
-		ID:       "a1",
-		Provider: "disabled-schedule",
-		Disabled: true,
-		Status:   StatusDisabled,
-		Metadata: map[string]any{
-			"email":      "x@example.com",
-			"expires_at": expiry.Format(time.RFC3339),
+	testCases := []struct {
+		name        string
+		disableAuth func(*Auth)
+	}{
+		{
+			name: "disabled flag",
+			disableAuth: func(auth *Auth) {
+				auth.Disabled = true
+			},
+		},
+		{
+			name: "disabled status",
+			disableAuth: func(auth *Auth) {
+				auth.Status = StatusDisabled
+			},
 		},
 	}
 
-	got, ok := nextRefreshCheckAt(now, auth, 15*time.Minute)
-	if !ok {
-		t.Fatalf("nextRefreshCheckAt() ok = false, want true")
-	}
-	want := expiry.Add(-lead)
-	if !got.Equal(want) {
-		t.Fatalf("nextRefreshCheckAt() = %s, want %s", got, want)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			auth := &Auth{
+				ID:       "disabled-schedule-" + strings.ReplaceAll(testCase.name, " ", "-"),
+				Provider: "disabled-schedule",
+				Status:   StatusActive,
+				Metadata: map[string]any{
+					"email":      "x@example.com",
+					"expires_at": expiry.Format(time.RFC3339),
+				},
+			}
+			manager := NewManager(nil, nil, nil)
+
+			if _, shouldSchedule := nextRefreshCheckAt(now, auth, 15*time.Minute); !shouldSchedule {
+				t.Fatal("active auth should be eligible for automatic refresh scheduling")
+			}
+			if !manager.shouldRefresh(auth, now) {
+				t.Fatal("active auth should be eligible for refresh before the disabled state is applied")
+			}
+
+			testCase.disableAuth(auth)
+
+			if next, shouldSchedule := nextRefreshCheckAt(now, auth, 15*time.Minute); shouldSchedule || !next.IsZero() {
+				t.Fatalf("disabled auth schedule = (%s, %t), want (zero, false)", next, shouldSchedule)
+			}
+			if manager.shouldRefresh(auth, now) {
+				t.Fatal("disabled auth should not be eligible for refresh")
+			}
+			if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+				t.Fatalf("register disabled auth: %v", errRegister)
+			}
+			if manager.markRefreshPending(auth.ID, now) {
+				t.Fatal("disabled auth should not be marked as pending refresh")
+			}
+			storedAuth, ok := manager.GetByID(auth.ID)
+			if !ok || storedAuth == nil {
+				t.Fatal("registered disabled auth is missing")
+			}
+			if !storedAuth.NextRefreshAfter.IsZero() {
+				t.Fatalf("disabled auth NextRefreshAfter = %s, want zero", storedAuth.NextRefreshAfter)
+			}
+		})
 	}
 }
 

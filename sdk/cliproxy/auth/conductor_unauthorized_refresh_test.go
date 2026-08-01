@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -13,13 +15,15 @@ import (
 type unauthorizedRefreshExecutor struct {
 	id string
 
-	mu            sync.Mutex
-	executeCalls  []string
-	streamCalls   []string
-	refreshCalls  int
-	tokenInvalid  map[string]struct{}
-	refreshFail   bool
-	refreshTokens map[string]string
+	mu             sync.Mutex
+	executeCalls   []string
+	streamCalls    []string
+	refreshCalls   int
+	tokenInvalid   map[string]struct{}
+	refreshFail    bool
+	refreshTokens  map[string]string
+	refreshStarted chan struct{}
+	allowRefresh   <-chan struct{}
 }
 
 func (e *unauthorizedRefreshExecutor) Identifier() string { return e.id }
@@ -57,21 +61,38 @@ func (e *unauthorizedRefreshExecutor) ExecuteStream(_ context.Context, auth *Aut
 	return &cliproxyexecutor.StreamResult{Headers: http.Header{"X-Auth": {auth.ID}}, Chunks: ch}, nil
 }
 
-func (e *unauthorizedRefreshExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
+func (e *unauthorizedRefreshExecutor) Refresh(ctx context.Context, auth *Auth) (*Auth, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.refreshCalls++
-	if e.refreshFail {
+	refreshFail := e.refreshFail
+	refreshToken := e.refreshTokens[auth.ID]
+	refreshStarted := e.refreshStarted
+	allowRefresh := e.allowRefresh
+	e.mu.Unlock()
+
+	if refreshStarted != nil {
+		select {
+		case refreshStarted <- struct{}{}:
+		default:
+		}
+	}
+	if allowRefresh != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-allowRefresh:
+		}
+	}
+	if refreshFail {
 		return nil, &Error{HTTPStatus: http.StatusUnauthorized, Message: "refresh token invalid"}
 	}
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
 	}
-	next := e.refreshTokens[auth.ID]
-	if next == "" {
-		next = "refreshed-access-token"
+	if refreshToken == "" {
+		refreshToken = "refreshed-access-token"
 	}
-	auth.Metadata["access_token"] = next
+	auth.Metadata["access_token"] = refreshToken
 	return auth, nil
 }
 
@@ -156,6 +177,175 @@ func newUnauthorizedRefreshFixture(t *testing.T, refreshFail bool) (*Manager, *u
 	}
 
 	return m, executor, primary, backup, model
+}
+
+func TestManager_RefreshAuthDisabledBeforeExecutionSkipsExecutor(t *testing.T) {
+	testCases := []struct {
+		name        string
+		disableAuth func(*Auth)
+	}{
+		{
+			name: "disabled flag",
+			disableAuth: func(auth *Auth) {
+				auth.Disabled = true
+			},
+		},
+		{
+			name: "disabled status",
+			disableAuth: func(auth *Auth) {
+				auth.Status = StatusDisabled
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager := NewManager(nil, nil, nil)
+			executor := &unauthorizedRefreshExecutor{
+				id:            "codex",
+				refreshTokens: map[string]string{"disabled-before-refresh": "new-access-token"},
+			}
+			manager.RegisterExecutor(executor)
+
+			auth := &Auth{
+				ID:       "disabled-before-refresh",
+				Provider: "codex",
+				Status:   StatusActive,
+				Metadata: map[string]any{
+					"access_token":  "old-access-token",
+					"refresh_token": "refresh-token",
+				},
+			}
+			if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+				t.Fatalf("register auth: %v", errRegister)
+			}
+			storedAuth, ok := manager.GetByID(auth.ID)
+			if !ok || storedAuth == nil {
+				t.Fatal("registered auth is missing")
+			}
+			testCase.disableAuth(storedAuth)
+			if _, errUpdate := manager.Update(context.Background(), storedAuth); errUpdate != nil {
+				t.Fatalf("disable auth: %v", errUpdate)
+			}
+
+			refreshedAuth, errRefresh := manager.refreshAuthForRequest(context.Background(), auth.ID, "")
+			if !errors.Is(errRefresh, errAuthRefreshDisabled) {
+				t.Fatalf("refresh error = %v, want %v", errRefresh, errAuthRefreshDisabled)
+			}
+			if refreshedAuth != nil {
+				t.Fatalf("refreshed auth = %v, want nil", refreshedAuth)
+			}
+			if refreshCalls := executor.RefreshCalls(); refreshCalls != 0 {
+				t.Fatalf("executor refresh calls = %d, want 0", refreshCalls)
+			}
+		})
+	}
+}
+
+func TestManager_RefreshAuthDoesNotOverwriteConcurrentDisable(t *testing.T) {
+	testCases := []struct {
+		name        string
+		refreshFail bool
+	}{
+		{name: "successful refresh", refreshFail: false},
+		{name: "unauthorized refresh failure", refreshFail: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			refreshStarted := make(chan struct{}, 1)
+			allowRefresh := make(chan struct{})
+			manager := NewManager(nil, nil, nil)
+			executor := &unauthorizedRefreshExecutor{
+				id:             "codex",
+				refreshFail:    testCase.refreshFail,
+				refreshTokens:  map[string]string{"concurrent-disable": "new-access-token"},
+				refreshStarted: refreshStarted,
+				allowRefresh:   allowRefresh,
+			}
+			manager.RegisterExecutor(executor)
+
+			auth := &Auth{
+				ID:       "concurrent-disable",
+				Provider: "codex",
+				Status:   StatusActive,
+				Metadata: map[string]any{
+					"access_token":  "old-access-token",
+					"refresh_token": "refresh-token",
+				},
+			}
+			if _, errRegister := manager.Register(ctx, auth); errRegister != nil {
+				t.Fatalf("register auth: %v", errRegister)
+			}
+
+			type refreshResult struct {
+				auth *Auth
+				err  error
+			}
+			resultChannel := make(chan refreshResult, 1)
+			go func() {
+				refreshedAuth, errRefresh := manager.refreshAuthForRequest(ctx, auth.ID, "")
+				resultChannel <- refreshResult{auth: refreshedAuth, err: errRefresh}
+			}()
+
+			select {
+			case <-refreshStarted:
+			case <-ctx.Done():
+				t.Fatalf("refresh did not start: %v", ctx.Err())
+			}
+
+			storedAuth, ok := manager.GetByID(auth.ID)
+			if !ok || storedAuth == nil {
+				t.Fatal("registered auth is missing while refresh is blocked")
+			}
+			storedAuth.Disabled = true
+			storedAuth.Status = StatusDisabled
+			storedAuth.StatusMessage = "disabled during refresh"
+			if _, errUpdate := manager.Update(ctx, storedAuth); errUpdate != nil {
+				t.Fatalf("disable auth during refresh: %v", errUpdate)
+			}
+			close(allowRefresh)
+
+			var result refreshResult
+			select {
+			case result = <-resultChannel:
+			case <-ctx.Done():
+				t.Fatalf("refresh did not finish: %v", ctx.Err())
+			}
+			if !errors.Is(result.err, errAuthRefreshDisabled) {
+				t.Fatalf("refresh error = %v, want %v", result.err, errAuthRefreshDisabled)
+			}
+			if result.auth != nil {
+				t.Fatalf("refreshed auth = %v, want nil", result.auth)
+			}
+			if refreshCalls := executor.RefreshCalls(); refreshCalls != 1 {
+				t.Fatalf("executor refresh calls = %d, want 1", refreshCalls)
+			}
+
+			finalAuth, ok := manager.GetByID(auth.ID)
+			if !ok || finalAuth == nil {
+				t.Fatal("auth is missing after concurrent disable")
+			}
+			if !finalAuth.Disabled || finalAuth.Status != StatusDisabled {
+				t.Fatalf("auth disabled state = (%t, %q), want (true, %q)", finalAuth.Disabled, finalAuth.Status, StatusDisabled)
+			}
+			if finalAuth.StatusMessage != "disabled during refresh" {
+				t.Fatalf("StatusMessage = %q, want concurrent disable message", finalAuth.StatusMessage)
+			}
+			if finalAuth.LastError != nil {
+				t.Fatalf("LastError = %v, want nil after discarded refresh result", finalAuth.LastError)
+			}
+			if !finalAuth.LastRefreshedAt.IsZero() {
+				t.Fatalf("LastRefreshedAt = %s, want zero after discarded refresh result", finalAuth.LastRefreshedAt)
+			}
+			if accessToken := authAccessToken(finalAuth); accessToken != "old-access-token" {
+				t.Fatalf("access token = %q, want old-access-token", accessToken)
+			}
+		})
+	}
 }
 
 func TestManager_Execute_UnauthorizedRefreshesCurrentAuthBeforeFallback(t *testing.T) {

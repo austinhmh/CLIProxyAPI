@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
 func TestSessionAffinitySnapshot_WindowFilter(t *testing.T) {
@@ -30,7 +30,7 @@ func TestSessionAffinitySnapshot_WindowFilter(t *testing.T) {
 	opts := cliproxyexecutor.Options{
 		Metadata: map[string]any{
 			cliproxyexecutor.ExecutionSessionMetadataKey: "sess-observe-1",
-			"idempotency_key":                            "idemp-1",
+			"idempotency_key": "idemp-1",
 		},
 	}
 	_, errExec := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{

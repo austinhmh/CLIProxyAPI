@@ -92,6 +92,8 @@ const (
 var quotaCooldownDisabled atomic.Bool
 var transientErrorCooldownSeconds atomic.Int64
 
+var errAuthRefreshDisabled = errors.New("auth is disabled, skipping refresh")
+
 // SetQuotaCooldownDisabled toggles quota cooldown scheduling globally.
 func SetQuotaCooldownDisabled(disable bool) {
 	quotaCooldownDisabled.Store(disable)
@@ -2257,6 +2259,10 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 
 // Update replaces an existing auth entry and notifies hooks.
 func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
+	return m.updateAuth(ctx, auth, false)
+}
+
+func (m *Manager) updateAuth(ctx context.Context, auth *Auth, rejectDisabledExisting bool) (*Auth, error) {
 	if auth == nil || auth.ID == "" {
 		return nil, nil
 	}
@@ -2264,7 +2270,14 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	existing, ok := m.auths[auth.ID]
 	if !ok || existing == nil {
 		m.mu.Unlock()
+		if rejectDisabledExisting {
+			return nil, errors.New("auth not found while applying refresh result")
+		}
 		return nil, nil
+	}
+	if rejectDisabledExisting && (existing.Disabled || existing.Status == StatusDisabled) {
+		m.mu.Unlock()
+		return nil, errAuthRefreshDisabled
 	}
 	if !auth.indexAssigned && auth.Index == "" {
 		auth.Index = existing.Index
@@ -5833,6 +5846,9 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	if a == nil {
 		return false
 	}
+	if a.Disabled || a.Status == StatusDisabled {
+		return false
+	}
 	if hasUnauthorizedAuthFailure(a) {
 		return false
 	}
@@ -6044,6 +6060,10 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 		m.mu.Unlock()
 		return false
 	}
+	if auth.Disabled || auth.Status == StatusDisabled {
+		m.mu.Unlock()
+		return false
+	}
 	if !auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter) {
 		m.mu.Unlock()
 		return false
@@ -6142,14 +6162,19 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 	defer lock.mu.Unlock()
 
 	m.mu.RLock()
-	auth := m.auths[id]
+	storedAuth := m.auths[id]
+	var auth *Auth
 	var exec ProviderExecutor
-	if auth != nil {
+	if storedAuth != nil {
+		auth = storedAuth.Clone()
 		exec = m.executors[auth.Provider]
 	}
 	m.mu.RUnlock()
 	if auth == nil || exec == nil {
 		return nil, errors.New("auth or executor not found")
+	}
+	if auth.Disabled || auth.Status == StatusDisabled {
+		return nil, errAuthRefreshDisabled
 	}
 
 	// Another request may already have refreshed this credential.
@@ -6165,32 +6190,38 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 		log.Debugf("refresh canceled for %s, %s", auth.Provider, auth.ID)
 		return nil, err
 	}
-	log.Debugf("refreshed %s, %s, %v", auth.Provider, auth.ID, err)
 	now := time.Now()
 	if err != nil {
 		unauthorized := isUnauthorizedError(err)
-		shouldReschedule := false
+		var schedulerAuth *Auth
 		m.mu.Lock()
-		if current := m.auths[id]; current != nil {
-			current.LastError = refreshErrorFromError(err)
-			if unauthorized {
-				current.NextRefreshAfter = time.Time{}
-				current.Unavailable = true
-				current.Status = StatusError
-				current.StatusMessage = "unauthorized"
-			} else {
-				current.NextRefreshAfter = now.Add(refreshFailureBackoff)
-			}
-			m.auths[id] = current
-			shouldReschedule = true
-			if m.scheduler != nil {
-				m.scheduler.upsertAuth(current.Clone())
-			}
+		current := m.auths[id]
+		if current == nil {
+			m.mu.Unlock()
+			return nil, errors.New("auth not found while applying refresh failure")
 		}
+		if current.Disabled || current.Status == StatusDisabled {
+			m.mu.Unlock()
+			return nil, errAuthRefreshDisabled
+		}
+		current = current.Clone()
+		current.LastError = refreshErrorFromError(err)
+		if unauthorized {
+			current.NextRefreshAfter = time.Time{}
+			current.Unavailable = true
+			current.Status = StatusError
+			current.StatusMessage = "unauthorized"
+		} else {
+			current.NextRefreshAfter = now.Add(refreshFailureBackoff)
+		}
+		m.auths[id] = current
+		schedulerAuth = current.Clone()
 		m.mu.Unlock()
-		if shouldReschedule {
-			m.queueRefreshReschedule(id)
+		if m.scheduler != nil {
+			m.scheduler.upsertAuth(schedulerAuth)
 		}
+		m.queueRefreshReschedule(id)
+		log.Debugf("refreshed %s, %s, %v", auth.Provider, auth.ID, err)
 		return nil, err
 	}
 	if updated == nil {
@@ -6214,17 +6245,18 @@ func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessTok
 	if m.shouldRefresh(updated, now) {
 		updated.NextRefreshAfter = now.Add(refreshIneffectiveBackoff)
 	}
-	saved, errUpdate := m.Update(ctx, updated)
+	saved, errUpdate := m.updateAuth(ctx, updated, true)
+	if errUpdate != nil {
+		return nil, errUpdate
+	}
+	if saved == nil {
+		return nil, errors.New("auth refresh result was not applied")
+	}
 	for _, model := range modelsToResume {
 		registry.GetGlobalRegistry().ResumeClientModel(id, model)
 	}
-	if errUpdate != nil {
-		log.Debugf("persist refreshed auth %s (%s) failed: %v", auth.Provider, auth.ID, errUpdate)
-	}
-	if saved != nil {
-		return saved, nil
-	}
-	return updated.Clone(), nil
+	log.Debugf("refreshed %s, %s, %v", auth.Provider, auth.ID, err)
+	return saved, nil
 }
 
 func (m *Manager) executorFor(provider string) ProviderExecutor {
