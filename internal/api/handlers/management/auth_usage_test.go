@@ -82,7 +82,7 @@ func TestListAuthFileUsage_AntigravityReturnsTwoEntries(t *testing.T) {
 		byName[name] = entry
 	}
 
-	gemini, ok := byName["antigravity-1.json-gemini"]
+	gemini, ok := byName["antigravity-1.json (gemini)"]
 	if !ok {
 		t.Fatalf("missing gemini entry, got names: %+v", byName)
 	}
@@ -94,7 +94,7 @@ func TestListAuthFileUsage_AntigravityReturnsTwoEntries(t *testing.T) {
 		t.Fatalf("gemini usage_7d = %+v", gemini["usage_7d"])
 	}
 
-	thirdParty, ok := byName["antigravity-1.json-3p"]
+	thirdParty, ok := byName["antigravity-1.json (3p)"]
 	if !ok {
 		t.Fatalf("missing 3p entry, got names: %+v", byName)
 	}
