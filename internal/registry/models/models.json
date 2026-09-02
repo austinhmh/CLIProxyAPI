@@ -220,12 +220,12 @@
       ]
     },
     {
-      "id": "claude-fable-5-1",
+      "id": "claude-fable-5",
       "object": "model",
-      "created": 1788220800,
+      "created": 1781049600,
       "owned_by": "anthropic",
       "type": "claude",
-      "display_name": "Claude Fable 5.1",
+      "display_name": "Claude Fable 5",
       "description": "Anthropic's most capable widely released model, for the most demanding reasoning and long-horizon agentic work",
       "context_length": 1000000,
       "max_completion_tokens": 128000,
@@ -250,13 +250,13 @@
       ]
     },
     {
-      "id": "claude-fable-5",
+      "id": "claude-fable-5-1",
       "object": "model",
-      "created": 1781049600,
+      "created": 1788220800,
       "owned_by": "anthropic",
       "type": "claude",
-      "display_name": "Claude Fable 5",
-      "description": "Anthropic's most capable widely released model, for the most demanding reasoning and long-horizon agentic work",
+      "display_name": "Claude Fable 5.1",
+      "description": "Claude Fable 5.1 extends Claude Fable 5 at the same input and output prices, with cache reads at a quarter of the cost, and brings stronger long-running agentic coding, multistep research, and document, spreadsheet, and slide work.",
       "context_length": 1000000,
       "max_completion_tokens": 128000,
       "thinking": {
