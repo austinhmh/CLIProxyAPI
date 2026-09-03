@@ -85,7 +85,8 @@ func TestUsageWindowScore_PastResetNoBonus(t *testing.T) {
 func TestUsageWindowScore_TypicalScenarios(t *testing.T) {
 	t.Parallel()
 
-	now := time.Now()
+	// NOTE: truncate so resetAt's seconds-only RFC3339 formatting round-trips exactly.
+	now := time.Now().Truncate(time.Second)
 	tests := []struct {
 		name        string
 		utilization int
@@ -124,7 +125,8 @@ func TestUsageWindowScore_TypicalScenarios(t *testing.T) {
 func TestUsageWindowScore_UrgencyOverridesHeadroomNearReset(t *testing.T) {
 	t.Parallel()
 
-	now := time.Now()
+	// NOTE: truncate so resetAt's seconds-only RFC3339 formatting round-trips exactly.
+	now := time.Now().Truncate(time.Second)
 	tests := []struct {
 		name    string
 		resetIn time.Duration
