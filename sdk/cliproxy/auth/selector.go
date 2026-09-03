@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strconv"
@@ -547,16 +548,23 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	return available[0], nil
 }
 
-// UsageAwareSelector picks the credential with the most usage headroom, scored from
-// each candidate's cached rate-limit snapshot (remaining quota and window reset
-// time; see usage_score.go). Credentials with no snapshot receive a neutral score
-// so they are neither favored nor starved relative to credentials with real usage
-// data.
+// UsageAwareSelector draws a credential with probability proportional to its usage
+// headroom, scored from each candidate's cached rate-limit snapshot (remaining
+// quota and window reset time; see usage_score.go). Credentials with no snapshot
+// receive a neutral score so they are neither favored nor starved relative to
+// credentials with real usage data.
 type UsageAwareSelector struct{}
 
-// Pick selects the available auth with the highest usage-aware score. Ties (most
-// commonly credentials that share the neutral fallback score) break toward the
-// lowest ID, matching getAvailableAuths' stable ID-sorted candidate order.
+// Pick draws one available auth using Ceph CRUSH's "straw2" algorithm: every
+// candidate gets an independent straw2Draw from its usage-aware score, and the
+// smallest draw wins (see straw2Draw). This selects each candidate with
+// probability proportional to its score instead of deterministically always
+// picking the single highest-scored one, which would otherwise send every
+// request to one credential until its cached score next refreshes. Candidates
+// tied at a zero score (fully exhausted with no known imminent reset) all draw
+// +Inf and fall back to the first one in getAvailableAuths' stable ID-sorted
+// candidate order; any other tie (most commonly several credentials sharing
+// the neutral fallback score) is split roughly evenly instead.
 func (s *UsageAwareSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	_ = opts
 	now := time.Now()
@@ -565,15 +573,28 @@ func (s *UsageAwareSelector) Pick(ctx context.Context, provider, model string, o
 		return nil, err
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
-	best := available[0]
-	bestScore := usageAwareScore(best, now)
+	winner := available[0]
+	winnerDraw := straw2Draw(usageAwareScore(winner, now))
 	for _, candidate := range available[1:] {
-		if score := usageAwareScore(candidate, now); score > bestScore {
-			best = candidate
-			bestScore = score
+		if draw := straw2Draw(usageAwareScore(candidate, now)); draw < winnerDraw {
+			winner = candidate
+			winnerDraw = draw
 		}
 	}
-	return best, nil
+	return winner, nil
+}
+
+// straw2Draw returns a weighted random draw for score, following Ceph CRUSH's
+// straw2 bucket algorithm: an Exp(1) random variable scaled by 1/score. Across a
+// set of candidates, the one with the smallest draw wins with probability
+// proportional to its score, rather than the highest score always winning. A
+// non-positive score draws +Inf so it never outranks a candidate with any real
+// headroom.
+func straw2Draw(score float64) float64 {
+	if score <= 0 {
+		return math.Inf(1)
+	}
+	return rand.ExpFloat64() / score
 }
 
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {

@@ -134,37 +134,55 @@ func TestUsageAwareSelectorPick_PrefersHigherHeadroom(t *testing.T) {
 
 	selector := &UsageAwareSelector{}
 	auths := []*Auth{
-		{ID: "hot", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 90}},
-		{ID: "cool", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 20}},
-		{ID: "warm", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 60}},
+		{ID: "hot", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 90}},
+		{ID: "cool", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 20}},
+		{ID: "warm", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 60}},
 	}
 
-	for index := 0; index < 5; index++ {
+	counts := make(map[string]int)
+	const trials = 3000
+	for index := 0; index < trials; index++ {
 		got, errPick := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
 		if errPick != nil {
 			t.Fatalf("Pick() #%d error = %v", index, errPick)
 		}
-		if got.ID != "cool" {
-			t.Fatalf("Pick() #%d auth.ID = %q, want %q", index, got.ID, "cool")
-		}
+		counts[got.ID]++
+	}
+	// straw2 draws each candidate with probability proportional to its score (here,
+	// headroom alone, since none of these report a reset time), so more headroom
+	// must win more often without ever fully starving the others.
+	if !(counts["cool"] > counts["warm"] && counts["warm"] > counts["hot"]) {
+		t.Fatalf("Pick() counts = %#v, want cool > warm > hot", counts)
+	}
+	if counts["hot"] == 0 {
+		t.Fatalf("Pick() counts = %#v, want hot to still win sometimes (usage-aware, not usage-exclusive)", counts)
 	}
 }
 
-func TestUsageAwareSelectorPick_DeterministicTiebreak(t *testing.T) {
+func TestUsageAwareSelectorPick_TiedScoresSplitEvenly(t *testing.T) {
 	t.Parallel()
 
 	selector := &UsageAwareSelector{}
 	auths := []*Auth{
-		{ID: "b", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 40}},
-		{ID: "a", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 40}},
+		{ID: "b", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 40}},
+		{ID: "a", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 40}},
 	}
 
-	got, err := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
-	if err != nil {
-		t.Fatalf("Pick() error = %v", err)
+	counts := make(map[string]int)
+	const trials = 4000
+	for index := 0; index < trials; index++ {
+		got, errPick := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
+		if errPick != nil {
+			t.Fatalf("Pick() #%d error = %v", index, errPick)
+		}
+		counts[got.ID]++
 	}
-	if got.ID != "a" {
-		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, "a")
+	// Equal scores mean equal straw2 weight, so neither ID is favored the way a
+	// deterministic tiebreak would: each should win close to half the draws.
+	for _, id := range []string{"a", "b"} {
+		if counts[id] < trials*2/5 || counts[id] > trials*3/5 {
+			t.Fatalf("Pick() counts = %#v, want %q near %d/%d", counts, id, trials/2, trials)
+		}
 	}
 }
 
@@ -173,16 +191,26 @@ func TestUsageAwareSelectorPick_FallbackDoesNotStarveUnmeasuredCredential(t *tes
 
 	selector := &UsageAwareSelector{}
 	auths := []*Auth{
-		{ID: "busy-claude", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 80}},
+		{ID: "busy-claude", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 80}},
 		{ID: "no-data", Provider: "gemini"},
 	}
 
-	got, err := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
-	if err != nil {
-		t.Fatalf("Pick() error = %v", err)
+	counts := make(map[string]int)
+	const trials = 3000
+	for index := 0; index < trials; index++ {
+		got, errPick := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
+		if errPick != nil {
+			t.Fatalf("Pick() #%d error = %v", index, errPick)
+		}
+		counts[got.ID]++
 	}
-	if got.ID != "no-data" {
-		t.Fatalf("Pick() auth.ID = %q, want %q (neutral fallback beats 80%% utilization)", got.ID, "no-data")
+	// no-data's neutral 0.5 score outweighs busy-claude's 0.2 headroom, so it should
+	// win more often, but busy-claude is still eligible and wins occasionally.
+	if counts["no-data"] <= counts["busy-claude"] {
+		t.Fatalf("Pick() counts = %#v, want no-data (neutral fallback) to beat busy-claude (80%% utilization) more often", counts)
+	}
+	if counts["busy-claude"] == 0 {
+		t.Fatalf("Pick() counts = %#v, want busy-claude to still win sometimes", counts)
 	}
 }
 
@@ -191,16 +219,71 @@ func TestUsageAwareSelectorPick_LowUtilizationBeatsUnmeasuredCredential(t *testi
 
 	selector := &UsageAwareSelector{}
 	auths := []*Auth{
-		{ID: "fresh-claude", Provider: "claude", RateLimits: map[string]any{"5h_utilization": 10}},
+		{ID: "fresh-claude", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 10}},
 		{ID: "no-data", Provider: "gemini"},
 	}
 
-	got, err := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
-	if err != nil {
-		t.Fatalf("Pick() error = %v", err)
+	counts := make(map[string]int)
+	const trials = 3000
+	for index := 0; index < trials; index++ {
+		got, errPick := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
+		if errPick != nil {
+			t.Fatalf("Pick() #%d error = %v", index, errPick)
+		}
+		counts[got.ID]++
 	}
-	if got.ID != "fresh-claude" {
-		t.Fatalf("Pick() auth.ID = %q, want %q (10%% utilization beats neutral fallback)", got.ID, "fresh-claude")
+	// fresh-claude's 0.9 headroom outweighs no-data's neutral 0.5 score, so it should
+	// win more often, but no-data is still eligible and wins occasionally.
+	if counts["fresh-claude"] <= counts["no-data"] {
+		t.Fatalf("Pick() counts = %#v, want fresh-claude (10%% utilization) to beat no-data (neutral fallback) more often", counts)
+	}
+	if counts["no-data"] == 0 {
+		t.Fatalf("Pick() counts = %#v, want no-data to still win sometimes", counts)
+	}
+}
+
+func TestUsageAwareSelectorPick_ZeroScoreNeverBeatsRealHeadroom(t *testing.T) {
+	t.Parallel()
+
+	selector := &UsageAwareSelector{}
+	auths := []*Auth{
+		{ID: "exhausted", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 100}},
+		{ID: "half", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 50}},
+	}
+
+	// A zero score (no headroom, no imminent reset) draws +Inf (see straw2Draw),
+	// so it must lose to any candidate with a positive score on every draw, not
+	// just on average.
+	for index := 0; index < 200; index++ {
+		got, errPick := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
+		if errPick != nil {
+			t.Fatalf("Pick() #%d error = %v", index, errPick)
+		}
+		if got.ID != "half" {
+			t.Fatalf("Pick() #%d auth.ID = %q, want %q (zero score never outdraws real headroom)", index, got.ID, "half")
+		}
+	}
+}
+
+func TestUsageAwareSelectorPick_AllZeroScoresFallBackToLowestID(t *testing.T) {
+	t.Parallel()
+
+	selector := &UsageAwareSelector{}
+	auths := []*Auth{
+		{ID: "b-exhausted", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 100}},
+		{ID: "a-exhausted", Provider: "claude", RateLimits: map[string]any{"7d_utilization": 100}},
+	}
+
+	// Both candidates draw +Inf, so the comparison in Pick never replaces the
+	// first candidate in getAvailableAuths' stable ID-sorted order.
+	for index := 0; index < 20; index++ {
+		got, errPick := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
+		if errPick != nil {
+			t.Fatalf("Pick() #%d error = %v", index, errPick)
+		}
+		if got.ID != "a-exhausted" {
+			t.Fatalf("Pick() #%d auth.ID = %q, want %q (tied +Inf draws fall back to lowest ID)", index, got.ID, "a-exhausted")
+		}
 	}
 }
 

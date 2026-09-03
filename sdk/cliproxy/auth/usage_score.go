@@ -8,14 +8,6 @@ import "time"
 // relative to credentials with real headroom data.
 const defaultUsageAwareScore = 0.5
 
-// Weights for combining a usage window's remaining headroom and reset proximity
-// into a single score. Headroom dominates; resetBonus mainly breaks ties among
-// credentials that are similarly exhausted.
-const (
-	usageHeadroomWeight = 0.70
-	usageResetWeight    = 0.30
-)
-
 // usageWindow is a normalized utilization/reset pair extracted from a credential's
 // provider-specific auth.RateLimits snapshot (see rate_limit_headers.go and
 // antigravity_quota.go for how that snapshot is populated).
@@ -26,7 +18,7 @@ type usageWindow struct {
 
 // usageAwareScore scores auth in [0, 1] from its most recent rate-limit snapshot:
 // higher means more headroom and is safer to route to. When a credential exposes
-// several windows (e.g. Claude's 5h and 7d limits), the most constrained window
+// several windows (e.g. Claude's 7d and 7d_oi limits), the most constrained window
 // wins, since that is the one actually gating the credential's availability.
 // Credentials with no snapshot get a neutral defaultUsageAwareScore.
 func usageAwareScore(auth *Auth, now time.Time) float64 {
@@ -63,11 +55,14 @@ func usageWindowsForAuth(auth *Auth) []usageWindow {
 	}
 }
 
-// claudeUsageWindows reads the 5h, 7d, and (when present) 7d_oi windows Anthropic
-// reports per rate_limit_headers.go's parseClaudeRateLimitHeaders.
+// claudeUsageWindows reads the 7d and (when present) 7d_oi windows Anthropic
+// reports per rate_limit_headers.go's parseClaudeRateLimitHeaders. The 5h window
+// is intentionally excluded from scoring: it isn't on the same scale as the 7d
+// windows, so folding it into the same "worst window" comparison would penalize
+// (or favor) a credential based on a limit that doesn't reflect its real
+// remaining headroom.
 func claudeUsageWindows(rateLimits map[string]any) []usageWindow {
 	var windows []usageWindow
-	windows = appendUsageWindow(windows, rateLimits, "5h_utilization", "5h_reset")
 	windows = appendUsageWindow(windows, rateLimits, "7d_utilization", "7d_reset")
 	windows = appendUsageWindow(windows, rateLimits, "7d_oi_utilization", "7d_oi_reset")
 	return windows
@@ -130,10 +125,14 @@ func appendAntigravityWindow(windows []usageWindow, window *AntigravityQuotaWind
 	return append(windows, usageWindow{utilization: *window.Utilization, resetAt: window.Reset})
 }
 
-// usageWindowScore scores a single utilization/reset window in [0, 1]. headroom
-// (remaining capacity) carries most of the weight; resetBonus rewards windows
-// closer to resetting, so among two similarly exhausted credentials the one
-// resetting sooner scores higher.
+// usageWindowScore scores a single utilization/reset window in [0, 1] as the
+// larger of its remaining headroom and its reset urgency (see resetBonus), not
+// a blend of the two. A window about to reset dominates the score regardless
+// of how exhausted it currently looks: whatever quota is unused right now is
+// about to be replaced by a fresh window anyway, so there is no reason to
+// avoid it in favor of a credential that has to make its headroom last
+// longer. A window with no imminent reset, or with comfortable headroom to
+// begin with, is scored on headroom alone.
 func usageWindowScore(utilization int, resetAt string, now time.Time) float64 {
 	headroom := (100 - float64(utilization)) / 100.0
 	switch {
@@ -142,7 +141,10 @@ func usageWindowScore(utilization int, resetAt string, now time.Time) float64 {
 	case headroom > 1:
 		headroom = 1
 	}
-	return usageHeadroomWeight*headroom + usageResetWeight*resetBonus(resetAt, now)
+	if urgency := resetBonus(resetAt, now); urgency > headroom {
+		return urgency
+	}
+	return headroom
 }
 
 // resetBonus returns a value in [0, 1] that grows as resetAt approaches now:
