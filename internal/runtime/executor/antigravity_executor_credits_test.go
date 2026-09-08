@@ -225,161 +225,6 @@ func TestClassifyAntigravity429(t *testing.T) {
 	})
 }
 
-func TestAntigravityShouldRetryNoCapacity_Standard503(t *testing.T) {
-	body := []byte(`{
-		"error": {
-			"code": 503,
-			"message": "No capacity available for model gemini-3.1-flash-image on the server",
-			"status": "UNAVAILABLE",
-			"details": [
-				{
-					"@type": "type.googleapis.com/google.rpc.ErrorInfo",
-					"reason": "MODEL_CAPACITY_EXHAUSTED",
-					"domain": "cloudcode-pa.googleapis.com",
-					"metadata": {
-						"model": "gemini-3.1-flash-image"
-					}
-				}
-			]
-		}
-	}`)
-	if !antigravityShouldRetryNoCapacity(http.StatusServiceUnavailable, body) {
-		t.Fatal("antigravityShouldRetryNoCapacity() = false, want true")
-	}
-}
-
-func TestAntigravityShouldRetryUnsupportedLocation_Standard400(t *testing.T) {
-	body := []byte(`{
-		"error": {
-			"code": 400,
-			"message": "User location is not supported for the API use.",
-			"status": "FAILED_PRECONDITION"
-		}
-	}`)
-	if !antigravityShouldRetryUnsupportedLocation(http.StatusBadRequest, body) {
-		t.Fatal("antigravityShouldRetryUnsupportedLocation() = false, want true")
-	}
-}
-
-func TestAntigravityShouldRetryUnsupportedLocation_IgnoresOtherErrors(t *testing.T) {
-	body := []byte(`{"error":{"code":400,"message":"invalid argument","status":"INVALID_ARGUMENT"}}`)
-	if antigravityShouldRetryUnsupportedLocation(http.StatusBadRequest, body) {
-		t.Fatal("antigravityShouldRetryUnsupportedLocation() = true, want false for unrelated 400 error")
-	}
-	if antigravityShouldRetryUnsupportedLocation(http.StatusServiceUnavailable, []byte(`user location is not supported`)) {
-		t.Fatal("antigravityShouldRetryUnsupportedLocation() = true, want false for non-400 status")
-	}
-}
-
-func TestAntigravityExecute_RetriesUnsupportedLocation400(t *testing.T) {
-	resetAntigravityCreditsRetryState()
-	t.Cleanup(resetAntigravityCreditsRetryState)
-
-	var requestCount int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		switch requestCount {
-		case 1:
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}`))
-		case 2:
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}}`))
-		default:
-			t.Fatalf("unexpected request count %d", requestCount)
-		}
-	}))
-	defer server.Close()
-
-	exec := NewAntigravityExecutor(&config.Config{RequestRetry: 1})
-	auth := &cliproxyauth.Auth{
-		ID: "auth-unsupported-location-400",
-		Attributes: map[string]string{
-			"base_url": server.URL,
-		},
-		Metadata: map[string]any{
-			"access_token": "token",
-			"project_id":   "project-1",
-			"expired":      time.Now().Add(1 * time.Hour).Format(time.RFC3339),
-		},
-	}
-
-	resp, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
-		Model:   "claude-sonnet-4-6",
-		Payload: []byte(`{"request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`),
-	}, cliproxyexecutor.Options{
-		SourceFormat: sdktranslator.FormatAntigravity,
-	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if len(resp.Payload) == 0 {
-		t.Fatal("Execute() returned empty payload")
-	}
-	if requestCount != 2 {
-		t.Fatalf("request count = %d, want 2", requestCount)
-	}
-}
-
-func TestAntigravityExecuteStream_RetriesUnsupportedLocation400(t *testing.T) {
-	resetAntigravityCreditsRetryState()
-	t.Cleanup(resetAntigravityCreditsRetryState)
-
-	var requestCount int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		switch requestCount {
-		case 1:
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}`))
-		case 2:
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1,\"totalTokenCount\":2}}}\n\n"))
-		default:
-			t.Fatalf("unexpected request count %d", requestCount)
-		}
-	}))
-	defer server.Close()
-
-	exec := NewAntigravityExecutor(&config.Config{RequestRetry: 1})
-	auth := &cliproxyauth.Auth{
-		ID: "auth-unsupported-location-stream-400",
-		Attributes: map[string]string{
-			"base_url": server.URL,
-		},
-		Metadata: map[string]any{
-			"access_token": "token",
-			"project_id":   "project-1",
-			"expired":      time.Now().Add(1 * time.Hour).Format(time.RFC3339),
-		},
-	}
-
-	result, err := exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
-		Model:   "gemini-3.5-flash-low",
-		Payload: []byte(`{"request":{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`),
-	}, cliproxyexecutor.Options{
-		SourceFormat: sdktranslator.FormatAntigravity,
-	})
-	if err != nil {
-		t.Fatalf("ExecuteStream() error = %v", err)
-	}
-	var gotChunk bool
-	for chunk := range result.Chunks {
-		if chunk.Err != nil {
-			t.Fatalf("stream chunk error: %v", chunk.Err)
-		}
-		if len(chunk.Payload) > 0 {
-			gotChunk = true
-		}
-	}
-	if !gotChunk {
-		t.Fatal("ExecuteStream() produced no payload chunks")
-	}
-	if requestCount != 2 {
-		t.Fatalf("request count = %d, want 2", requestCount)
-	}
-}
-
 func TestInjectEnabledCreditTypes(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","request":{}}`)
 	got := injectEnabledCreditTypes(body)
@@ -410,27 +255,19 @@ func TestParseRetryDelay_HumanReadableDuration(t *testing.T) {
 	}
 }
 
-func TestAntigravityExecute_RetriesTransient429ResourceExhausted(t *testing.T) {
+func TestAntigravityExecute_DoesNotUseRequestRetryForInternalRetries(t *testing.T) {
 	resetAntigravityCreditsRetryState()
 	t.Cleanup(resetAntigravityCreditsRetryState)
 
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		switch requestCount {
-		case 1:
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`))
-		case 2:
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}}`))
-		default:
-			t.Fatalf("unexpected request count %d", requestCount)
-		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`))
 	}))
 	defer server.Close()
 
-	exec := NewAntigravityExecutor(&config.Config{RequestRetry: 1})
+	exec := NewAntigravityExecutor(&config.Config{RequestRetry: 3})
 	auth := &cliproxyauth.Auth{
 		ID: "auth-transient-429",
 		Attributes: map[string]string{
@@ -449,14 +286,14 @@ func TestAntigravityExecute_RetriesTransient429ResourceExhausted(t *testing.T) {
 	}, cliproxyexecutor.Options{
 		SourceFormat: sdktranslator.FormatAntigravity,
 	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	if err == nil {
+		t.Fatalf("Execute() error = nil, want upstream 429")
 	}
-	if len(resp.Payload) == 0 {
-		t.Fatal("Execute() returned empty payload")
+	if len(resp.Payload) != 0 {
+		t.Fatalf("Execute() returned payload %q, want empty payload", resp.Payload)
 	}
-	if requestCount != 2 {
-		t.Fatalf("request count = %d, want 2", requestCount)
+	if requestCount != 1 {
+		t.Fatalf("request count = %d, want 1", requestCount)
 	}
 }
 

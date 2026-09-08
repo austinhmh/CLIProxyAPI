@@ -10,6 +10,7 @@ import (
 	requestlogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	"golang.org/x/net/context"
@@ -41,7 +42,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		close(errChan)
 		return nil, nil, errChan
 	}
-	execCtx, nestedTracker := withNestedExecutionTracker(ctx)
+	execCtx, nestedTracker := withNestedExecutionTracker(coreusage.WithStream(ctx, true))
 	req, opts := h.pluginExecutorRequest(execCtx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, true, execOptions)
 	lifecycle := h.newRequestLifecycleTracker(execCtx, entryProtocol, modelName, originalRequestedModel, true, opts.Metadata, execOptions.SkipInterceptorPluginID)
 	var interceptErr *interfaces.ErrorMessage
@@ -70,6 +71,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		close(errChan)
 		return nil, nil, errChan
 	}
+	execCtx = enrichContextWithSessionHierarchy(execCtx, opts.Headers, req.Payload, opts.Metadata)
 	var reporter *helps.UsageReporter
 	if !execOptions.InternalSource {
 		reporter = helps.NewUsageReporter(execCtx, executorPluginID, modelName, nil)
@@ -233,11 +235,14 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 					RequestHeaders:  cloneHeader(streamRequestHeaders),
 					ResponseHeaders: cloneHeader(rawStreamHeaders),
 					Body:            payload,
-					HistoryChunks:   cloneByteSlices(historyChunks),
 					ChunkIndex:      chunkIndex,
 					Metadata:        opts.Metadata,
 				}
 				// Re-evaluate each chunk so mid-stream plugin reloads stay correct.
+				// Schema v5+ omits history here.
+				if streamChunkPayloadIncludesHistory(interceptorHost) {
+					chunkReq.HistoryChunks = cloneByteSlices(historyChunks)
+				}
 				// Schema v3+ omits bodies here (one header-init clone only).
 				if streamChunkPayloadIncludesRequestBody(interceptorHost) {
 					chunkReq.OriginalRequest = cloneBytes(streamOriginalRequest)
@@ -282,7 +287,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 				if turn := requestlogging.RequestTimingTurnFromContext(ctx); turn != nil {
 					turn.MarkOnce(requestlogging.TimingStageFirstHandlerDeliverable, requestlogging.RequestTimingEventDetails{Outcome: "plugin_payload"})
 				}
-				if streamInterceptorsActive {
+				if streamInterceptorsActive && streamChunkPayloadIncludesHistory(interceptorHost) {
 					historyChunks = appendStreamInterceptorHistory(historyChunks, payload)
 				}
 			case <-done:
@@ -362,8 +367,10 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		Headers:                     modelExecutionHeaders(ctx, execOptions.Headers),
 		Query:                       modelExecutionQuery(ctx, execOptions.Query),
 		RequestAfterAuthInterceptor: h.requestAfterAuthInterceptor(afterAuthCapture, lifecycle.requestID(), execOptions.SkipInterceptorPluginID),
+		WebSocketResponseObserver:   h.webSocketResponseObserver(lifecycle.requestID(), execOptions.SkipInterceptorPluginID),
 	}
 	opts.Metadata = reqMeta
+	ctx = enrichContextWithSessionHierarchy(ctx, opts.Headers, req.Payload, opts.Metadata)
 	var interceptErr *interfaces.ErrorMessage
 	req, opts, interceptErr = h.applyRequestInterceptorsBeforeAuth(ctx, entryProtocol, originalRequestedModel, lifecycle.requestID(), req, opts, execOptions.SkipInterceptorPluginID)
 	if interceptErr != nil {
@@ -382,6 +389,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		close(errChan)
 		return nil, nil, errChan
 	}
+	ctx = enrichContextWithSessionHierarchy(ctx, opts.Headers, req.Payload, opts.Metadata)
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
@@ -402,6 +410,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 	executedRequest := func() (coreexecutor.Request, coreexecutor.Options) {
 		return afterAuthCapture.apply(req, opts)
+	}
+	if executedReq, executedOpts := executedRequest(); len(executedOpts.Headers) > 0 || len(executedReq.Payload) > 0 || len(executedOpts.Metadata) > 0 {
+		ctx = enrichContextWithSessionHierarchy(ctx, executedOpts.Headers, executedReq.Payload, executedOpts.Metadata)
 	}
 	passthroughHeadersEnabled := PassthroughHeadersEnabled(h.Cfg)
 	interceptorHost := h.interceptorHost()
@@ -471,11 +482,14 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 				RequestHeaders:  cloneHeader(streamRequestHeaders),
 				ResponseHeaders: cloneHeader(rawStreamHeaders),
 				Body:            payload,
-				HistoryChunks:   cloneByteSlices(historyChunks),
 				ChunkIndex:      *chunkIndex,
 				Metadata:        opts.Metadata,
 			}
 			// Re-evaluate each chunk so mid-stream plugin reloads stay correct.
+			// Schema v5+ omits history here.
+			if streamChunkPayloadIncludesHistory(interceptorHost) {
+				chunkReq.HistoryChunks = cloneByteSlices(historyChunks)
+			}
 			// Schema v3+ omits bodies here (one header-init clone only).
 			if streamChunkPayloadIncludesRequestBody(interceptorHost) {
 				chunkReq.OriginalRequest = cloneBytes(streamOriginalRequest)
@@ -697,7 +711,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 				}
 				return
 			}
-			if streamInterceptorsActive {
+			if streamInterceptorsActive && streamChunkPayloadIncludesHistory(interceptorHost) {
 				historyChunks = appendStreamInterceptorHistory(historyChunks, bootstrapPayload)
 			}
 		}
@@ -761,7 +775,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 				}
 				return
 			}
-			if streamInterceptorsActive {
+			if streamInterceptorsActive && streamChunkPayloadIncludesHistory(interceptorHost) {
 				historyChunks = appendStreamInterceptorHistory(historyChunks, payload)
 			}
 		}

@@ -32,8 +32,8 @@ func (a *CodexAuthenticator) Provider() string {
 }
 
 func (a *CodexAuthenticator) RefreshLead() *time.Duration {
-	t := 5 * 24 * time.Hour
-	return &t
+	refreshLead := 24 * time.Hour
+	return &refreshLead
 }
 
 func (a *CodexAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *LoginOptions) (*coreauth.Auth, error) {

@@ -26,10 +26,10 @@ func NewAntigravityAuthenticator() Authenticator { return &AntigravityAuthentica
 // Provider returns the provider key for antigravity.
 func (AntigravityAuthenticator) Provider() string { return "antigravity" }
 
-// RefreshLead instructs the manager to refresh five minutes before expiry.
+// RefreshLead instructs the manager to refresh 30 minutes before expiry.
 func (AntigravityAuthenticator) RefreshLead() *time.Duration {
-	t := 5 * time.Minute
-	return &t
+	refreshLead := 30 * time.Minute
+	return &refreshLead
 }
 
 // Login launches a local OAuth flow to obtain antigravity tokens and persists them.
