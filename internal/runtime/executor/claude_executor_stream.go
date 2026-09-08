@@ -63,10 +63,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	originalPayload := originalPayloadSource
 	incomingHeaders, claudeCodeDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, originalPayload, false, e.cfg)
 	confirmedClaudeCode := claudeCodeDetection.Confirmed
-	claudeSessionID := ""
-	if fp.ProfileClaudeCodeCLI {
-		claudeSessionID = helps.ClaudeAgentSessionUUIDForRequest(incomingHeaders, originalPayload, req.Payload, confirmedClaudeCode, opts.Metadata, req.Metadata)
-	}
+	claudeSessionID := helps.ClaudeAgentSessionUUIDForRequest(incomingHeaders, originalPayload, req.Payload, confirmedClaudeCode, opts.Metadata, req.Metadata)
 
 	continuityCtx := &helps.ClaudeContinuityContext{}
 	ctx = helps.WithClaudeContinuityContext(ctx, continuityCtx)
