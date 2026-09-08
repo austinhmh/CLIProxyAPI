@@ -162,27 +162,15 @@ func (m *Manager) RefreshSchedulerAll() {
 // ReconcileRegistryModelStates aligns per-model runtime state with the current
 // registry snapshot for one auth.
 //
-// Active cooldown and quota states are preserved when the registry has advanced
-// to a new client-registration epoch. Within the same epoch, supported model
-// states are reset to match an explicit reconciliation request. ModelStates for
-// models that are no longer reachable directly or through aliases are pruned.
+// Active cooldown and quota states for supported models are preserved, while
+// stale or expired errors are reset. ModelStates for models that are no longer
+// reachable directly or through aliases are pruned.
 func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID string) {
 	if m == nil || authID == "" {
 		return
 	}
 
 	globalReg := registry.GetGlobalRegistry()
-	previousRegistryEpoch := uint64(0)
-	if m.scheduler != nil {
-		m.scheduler.mu.Lock()
-		providerKey := m.scheduler.authProviders[authID]
-		if providerState := m.scheduler.providers[providerKey]; providerState != nil {
-			if scheduledMeta := providerState.auths[authID]; scheduledMeta != nil {
-				previousRegistryEpoch = scheduledMeta.registryEpoch
-			}
-		}
-		m.scheduler.mu.Unlock()
-	}
 	var (
 		snapshot             *Auth
 		supportedModels      []*registry.ModelInfo
@@ -204,7 +192,6 @@ func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID strin
 
 		for retry := 0; retry < 10; retry++ {
 			supportedModels, regEpoch = globalReg.GetModelsAndEpochForClient(authID)
-			preserveActiveCooldowns := previousRegistryEpoch != 0 && previousRegistryEpoch != regEpoch
 			candidateAuth := &Auth{
 				ID:          auth.ID,
 				Provider:    auth.Provider,
@@ -304,7 +291,7 @@ func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID strin
 				if modelStateIsClean(state) {
 					continue
 				}
-				if preserveActiveCooldowns && isModelStateActiveCooldown(state, now) {
+				if isModelStateActiveCooldown(state, now) {
 					continue
 				}
 				clonedState := state.Clone()

@@ -303,6 +303,16 @@ func TestManager_ReconcileRegistryModelStates_PersistsCooldownRemoval(t *testing
 		t.Fatalf("records before reconcile = %+v, want cooldown for model %q", recordsBeforeReconcile, model)
 	}
 
+	expiredAt := time.Now().Add(-time.Minute)
+	manager.mu.Lock()
+	if current := manager.auths[auth.ID]; current != nil {
+		current.NextRetryAfter = expiredAt
+		if state := current.ModelStates[model]; state != nil {
+			state.NextRetryAfter = expiredAt
+		}
+	}
+	manager.mu.Unlock()
+
 	manager.ReconcileRegistryModelStates(context.Background(), auth.ID)
 	if got := store.saveCount.Load(); got != 2 {
 		t.Fatalf("reconcile saved state %d times, want 2", got)

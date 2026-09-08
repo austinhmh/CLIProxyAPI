@@ -34,7 +34,7 @@ func TestCodexQuotaErrorCredentialScope(t *testing.T) {
 			var err error
 			switch test.path {
 			case "http":
-				err = newCodexStatusErr(http.StatusTooManyRequests, []byte(test.body))
+				err = newCodexStatusErr(http.StatusTooManyRequests, []byte(test.body), http.Header{})
 			case "terminal":
 				terminalErr, _, ok := codexTerminalStreamErr([]byte(test.body))
 				if !ok {
