@@ -33,6 +33,18 @@ if [[ ! -f "${COMPOSE_FILE}" ]]; then
   exit 1
 fi
 
+# The compose file bind-mounts CONFIG_FILE. Docker silently creates a directory
+# in its place when the file is missing, which makes every container restart.
+CONFIG_FILE="${CPA_CONFIG_FILE:-config.yaml}"
+if [[ -d "${CONFIG_FILE}" ]]; then
+  echo "Error: ${CONFIG_FILE} is a directory, not a config file; remove it and restore the real config before deploying."
+  exit 1
+fi
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "Error: config file not found: ${CONFIG_FILE}"
+  exit 1
+fi
+
 if [[ "${IMAGE_REFERENCE}" == ghcr.io/* ]]; then
   GHCR_TOKEN="${GHCR_TOKEN:-${GH_TOKEN:-}}"
   GHCR_USERNAME="${GHCR_USERNAME:-austinhmh}"
