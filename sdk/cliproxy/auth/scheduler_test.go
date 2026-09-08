@@ -834,7 +834,7 @@ func TestSchedulerPick_RoundRobinPreservesWebsocketSuccessorAcrossCooldown(t *te
 	wsA := &Auth{ID: "codex-ws-a", Provider: "codex", Attributes: map[string]string{"websockets": "true"}}
 	wsB := &Auth{ID: "codex-ws-b", Provider: "codex", Attributes: map[string]string{"websockets": "true"}}
 	wsC := &Auth{ID: "codex-ws-c", Provider: "codex", Attributes: map[string]string{"websockets": "true"}}
-	httpOnly := &Auth{ID: "codex-http", Provider: "codex"}
+	httpOnly := &Auth{ID: "codex-http", Provider: "codex", Attributes: map[string]string{"websockets": "false"}}
 	scheduler := newSchedulerForTest(&RoundRobinSelector{}, httpOnly, wsA, wsB, wsC)
 
 	ctx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())

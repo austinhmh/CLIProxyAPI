@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -547,6 +548,20 @@ func (r *UsageReporter) ttftDuration() time.Duration {
 		return r.firstPacketDuration
 	}
 	return 0
+}
+
+type usageTTFTReadCloser struct {
+	io.ReadCloser
+	mark     func()
+	markOnce sync.Once
+}
+
+func (reader *usageTTFTReadCloser) Read(buffer []byte) (int, error) {
+	bytesRead, errRead := reader.ReadCloser.Read(buffer)
+	if bytesRead > 0 && reader.mark != nil {
+		reader.markOnce.Do(reader.mark)
+	}
+	return bytesRead, errRead
 }
 
 type usageTTFTRoundTripper struct {
