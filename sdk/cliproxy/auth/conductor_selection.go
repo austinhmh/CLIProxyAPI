@@ -195,6 +195,7 @@ func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID strin
 	auth, ok := m.auths[authID]
 	if ok && auth != nil {
 		now = time.Now()
+		credentialCooldownActive := hasActiveCredentialScopedCooldown(auth, now)
 		trackCooldownState := m.cooldownStore != nil
 		var cooldownRecordsBefore []CooldownStateRecord
 		if trackCooldownState {
@@ -318,11 +319,13 @@ func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID strin
 			if globalReg.ClientRegistrationEpoch(authID) == regEpoch {
 				auth.ModelStates = candidateAuth.ModelStates
 				if candidateChanged {
-					updateAggregatedAvailability(auth, now)
-					if !hasModelError(auth, now) {
-						auth.LastError = nil
-						auth.StatusMessage = ""
-						auth.Status = StatusActive
+					if !credentialCooldownActive {
+						updateAggregatedAvailability(auth, now)
+						if !hasModelError(auth, now) {
+							auth.LastError = nil
+							auth.StatusMessage = ""
+							auth.Status = StatusActive
+						}
 					}
 					auth.Generation++
 					auth.UpdatedAt = now

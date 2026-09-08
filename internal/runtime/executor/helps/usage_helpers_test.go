@@ -1205,7 +1205,7 @@ func (TestUsageExecutor) Identifier() string {
 }
 
 func TestUsageReporterPropagatesSessionHierarchy(t *testing.T) {
-	ctx := logging.WithClientRequestMetadata(context.Background(), logging.ClientRequestMetadata{
+	ctx := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
 		SessionID:       "claude:sess-1:agent:sub-1",
 		ParentSessionID: "claude:sess-1",
 	})
@@ -1238,7 +1238,7 @@ func TestUsageReporterPropagatesSessionHierarchy(t *testing.T) {
 	}
 
 	// Test cross-prefix alias rejection (e.g. pck:* and conv:* are aliases, not parent-child)
-	ctxAlias := logging.WithClientRequestMetadata(context.Background(), logging.ClientRequestMetadata{
+	ctxAlias := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
 		SessionID:       "pck:prompt-key-123",
 		ParentSessionID: "conv:conv-456",
 	})
