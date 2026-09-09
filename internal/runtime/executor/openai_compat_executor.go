@@ -36,17 +36,32 @@ const (
 	openAICompatMultipartMemory       int64 = 32 << 20
 )
 
-// OpenAICompatExecutor implements a stateless executor for OpenAI-compatible providers.
+// OpenAICompatExecutor implements an executor for OpenAI-compatible providers.
 // It performs request/response translation and executes against the provider base URL
 // using per-auth credentials (API key) and per-auth HTTP transport (proxy) from context.
 type OpenAICompatExecutor struct {
-	provider string
-	cfg      *config.Config
+	provider              string
+	cfg                   *config.Config
+	priorityWarmupRuntime *helps.OpenAICompatPriorityWarmupRuntime
+}
+
+type OpenAICompatPriorityWarmupRuntime = helps.OpenAICompatPriorityWarmupRuntime
+
+func NewOpenAICompatPriorityWarmupRuntime() *OpenAICompatPriorityWarmupRuntime {
+	return helps.NewOpenAICompatPriorityWarmupRuntime()
 }
 
 // NewOpenAICompatExecutor creates an executor bound to a provider key (e.g., "openrouter").
 func NewOpenAICompatExecutor(provider string, cfg *config.Config) *OpenAICompatExecutor {
-	return &OpenAICompatExecutor{provider: provider, cfg: cfg}
+	return NewOpenAICompatExecutorWithPriorityWarmupRuntime(provider, cfg, nil)
+}
+
+// NewOpenAICompatExecutorWithPriorityWarmupRuntime shares successes across reloads.
+func NewOpenAICompatExecutorWithPriorityWarmupRuntime(provider string, cfg *config.Config, runtime *OpenAICompatPriorityWarmupRuntime) *OpenAICompatExecutor {
+	if runtime == nil {
+		runtime = NewOpenAICompatPriorityWarmupRuntime()
+	}
+	return &OpenAICompatExecutor{provider: provider, cfg: cfg, priorityWarmupRuntime: runtime}
 }
 
 // Identifier implements cliproxyauth.ProviderExecutor.
@@ -168,6 +183,13 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
+	var priorityWarmupAttempt *helps.OpenAICompatPriorityWarmupAttempt
+	if compat := e.resolveCompatConfig(auth); useNativeResponses && compat != nil && compat.PriorityCacheWarmup {
+		translated, priorityWarmupAttempt, err = e.priorityWarmupRuntime.Prepare(httpReq, e.Identifier(), authID, attrs, translated, req, opts)
+		if err != nil {
+			return resp, err
+		}
+	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -222,6 +244,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		out = helps.EnsureResponsesUsageDetails(out)
 	}
 	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	if priorityWarmupAttempt != nil && helps.OpenAICompatResponsesSuccessfulBody(body) {
+		priorityWarmupAttempt.MarkSuccess(ctx)
+	}
 	return resp, nil
 }
 
@@ -397,6 +422,13 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
+	var priorityWarmupAttempt *helps.OpenAICompatPriorityWarmupAttempt
+	if compat := e.resolveCompatConfig(auth); useNativeResponses && compat != nil && compat.PriorityCacheWarmup {
+		translated, priorityWarmupAttempt, err = e.priorityWarmupRuntime.Prepare(httpReq, e.Identifier(), authID, attrs, translated, req, opts)
+		if err != nil {
+			return nil, err
+		}
+	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -441,6 +473,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		var param any
 		var streamUsage helps.StreamUsageBuffer
 		var seenTerminal bool
+		var successfulTerminal bool
 		var streamFailed bool
 		var streamAborted bool
 		var upstreamEvent string
@@ -537,6 +570,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 				if openAICompatResponsesTerminalEvent(responseEvent) {
 					seenTerminal = true
+					successfulTerminal = helps.OpenAICompatResponsesSuccessfulTerminal(dataPayload, eventName)
 					return true
 				}
 			}
@@ -624,6 +658,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					return
 				}
 			}
+		}
+		if successfulTerminal && errScan == nil {
+			priorityWarmupAttempt.MarkSuccess(ctx)
 		}
 		// Ensure we record the request if no usage chunk was ever seen.
 		streamUsage.Publish(ctx, reporter)

@@ -96,6 +96,9 @@ type Service struct {
 	// claudePromptCacheRuntime preserves bounded cache knowledge across executor reloads.
 	claudePromptCacheRuntime *executor.ClaudePromptCacheRuntime
 
+	// openAICompatPriorityWarmupRuntime preserves successful roots across executor reloads.
+	openAICompatPriorityWarmupRuntime *executor.OpenAICompatPriorityWarmupRuntime
+
 	// pluginHost owns dynamic plugin lifecycle and runtime capability adapters.
 	pluginHost *pluginhost.Host
 

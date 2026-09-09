@@ -114,6 +114,14 @@ jobs:
             -run '^(TestApplyClaudeHeadersWithSession|TestClaudePromptCache|TestClaudeCacheDiagnostics|TestClaudeDiagnosticsFallback|TestClaudeExecutorCountTokens|TestClaudeExecutorExecuteStreamRetainsStartedCacheStateUntilStreamEnds|TestClaudeExecutor_ExecuteOpenAINonStreamUsesSSEHeaders)' \
             ./internal/runtime/executor
 
+      - name: Run Responses priority warmup race tests
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test -race -count=1 -p "$(nproc)" \
+            -run '^(TestOpenAICompatPriority|TestServiceOpenAICompatPriority|TestOpenAIResponsesPromptRoot)' \
+            ./internal/runtime/executor ./sdk/cliproxy ./sdk/cliproxy/session
+
       - name: Vet Claude identity package
         run: go vet ./sdk/cliproxy/auth
 

@@ -266,20 +266,21 @@ func (b *Builder) Build() (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:                      b.cfg,
-		configPath:               b.configPath,
-		tokenProvider:            tokenProvider,
-		apiKeyProvider:           apiKeyProvider,
-		watcherFactory:           watcherFactory,
-		hooks:                    b.hooks,
-		authManager:              authManager,
-		accessManager:            accessManager,
-		coreManager:              coreManager,
-		cooldownStateStore:       cooldownStateStore,
-		claudePromptCacheRuntime: executor.NewClaudePromptCacheRuntime(),
-		pluginHost:               pluginHost,
-		appliedRoutingState:      appliedRoutingState,
-		serverOptions:            append([]api.ServerOption(nil), b.serverOptions...),
+		cfg:                               b.cfg,
+		configPath:                        b.configPath,
+		tokenProvider:                     tokenProvider,
+		apiKeyProvider:                    apiKeyProvider,
+		watcherFactory:                    watcherFactory,
+		hooks:                             b.hooks,
+		authManager:                       authManager,
+		accessManager:                     accessManager,
+		coreManager:                       coreManager,
+		cooldownStateStore:                cooldownStateStore,
+		claudePromptCacheRuntime:          executor.NewClaudePromptCacheRuntime(),
+		openAICompatPriorityWarmupRuntime: executor.NewOpenAICompatPriorityWarmupRuntime(),
+		pluginHost:                        pluginHost,
+		appliedRoutingState:               appliedRoutingState,
+		serverOptions:                     append([]api.ServerOption(nil), b.serverOptions...),
 	}
 	if b.postAuthHook != nil {
 		service.serverOptions = append(service.serverOptions, api.WithPostAuthHook(b.postAuthHook))
