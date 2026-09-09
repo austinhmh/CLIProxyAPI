@@ -117,10 +117,20 @@ jobs:
       - name: Run Responses priority warmup race tests
         env:
           CGO_ENABLED: "1"
+        shell: bash
         run: |
-          go test -race -count=1 -p "$(nproc)" \
+          set -o pipefail
+          if ! go test -race -json -count=1 -p "$(nproc)" \
             -run '^(TestOpenAICompatPriority|TestServiceOpenAICompatPriority|TestOpenAIResponsesPromptRoot)' \
-            ./internal/runtime/executor ./sdk/cliproxy ./sdk/cliproxy/session
+            ./internal/runtime/executor ./sdk/cliproxy ./sdk/cliproxy/session \
+            2>&1 | tee "${RUNNER_TEMP}/responses-priority-race.json"; then
+            failure_output="$(jq -rs 'map(select(.Action == "output")) | map(.Output // "") | join("") | .[-20000:]' "${RUNNER_TEMP}/responses-priority-race.json")"
+            failure_output="${failure_output//'%'/'%25'}"
+            failure_output="${failure_output//$'\r'/'%0D'}"
+            failure_output="${failure_output//$'\n'/'%0A'}"
+            echo "::error title=Responses priority race tests failed::${failure_output}"
+            exit 1
+          fi
 
       - name: Vet Claude identity package
         run: go vet ./sdk/cliproxy/auth

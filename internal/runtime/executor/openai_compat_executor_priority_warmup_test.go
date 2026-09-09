@@ -170,8 +170,10 @@ func TestOpenAICompatPriorityConcurrentColdRequests(t *testing.T) {
 	defer cancel()
 	results := make(chan error, concurrency)
 	for index := 0; index < concurrency; index++ {
+		// Usage reporting mutates Auth.Index; share the warm runtime, not request-local auth metadata.
+		requestAuth := auth.Clone()
 		go func() {
-			_, err := executePriorityWarmupTest(ctx, executor, auth, priorityWarmupRequest, false, nil)
+			_, err := executePriorityWarmupTest(ctx, executor, requestAuth, priorityWarmupRequest, false, nil)
 			results <- err
 		}()
 	}
