@@ -14,6 +14,7 @@ services:
     volumes:
       - ./config.yaml:/CLIProxyAPI/config.yaml
       - ./auths:/root/.cli-proxy-api
+      - ./plugins:/CLIProxyAPI/plugins
       - ./logs:/CLIProxyAPI/logs
       - /root/cert/proxy.austinhmh.com:/certs:ro
     environment:
