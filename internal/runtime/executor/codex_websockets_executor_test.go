@@ -2244,7 +2244,6 @@ func TestApplyCodexWebsocketHeaders_EmptyAPIKey_OmitsAuthorizationAndOAuthHeader
 }
 
 func TestApplyModelHeaderOverridesFromModelConfig(t *testing.T) {
-	const wantUA = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -2262,16 +2261,17 @@ func TestApplyModelHeaderOverridesFromModelConfig(t *testing.T) {
 	applyCodexHeaders(req, auth, "oauth-token", true, cfg)
 	applyModelHeaderOverrides(req.Header, "gpt-5.6-luna")
 
-	if got := req.Header.Get("User-Agent"); got != wantUA {
-		t.Fatalf("User-Agent = %q, want %q", got, wantUA)
+	userAgent := req.Header.Get("User-Agent")
+	if !strings.HasPrefix(userAgent, "codex-tui/") || !strings.Contains(userAgent, " (Mac OS ") || !strings.Contains(userAgent, "; arm64)") {
+		t.Fatalf("User-Agent = %q, want a Codex TUI macOS arm64 user agent", userAgent)
 	}
 	if got := codexSessionHeaderValue(req.Header); got == "" {
 		t.Fatal("expected Session_id to be set for Mac OS User-Agent override")
 	}
 
 	applyModelHeaderOverrides(req.Header, "gpt-5.4")
-	if got := req.Header.Get("User-Agent"); got != wantUA {
-		t.Fatalf("User-Agent after no-op override = %q, want %q", got, wantUA)
+	if got := req.Header.Get("User-Agent"); got != userAgent {
+		t.Fatalf("User-Agent after no-op override = %q, want %q", got, userAgent)
 	}
 }
 

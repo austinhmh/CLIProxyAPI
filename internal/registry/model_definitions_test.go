@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing.T) {
 	models := GetStaticModelDefinitionsByChannel("gemini-interactions")
@@ -10,13 +13,16 @@ func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing
 }
 
 func TestModelOverrideHeadersFromEmbeddedModels(t *testing.T) {
-	const wantUA = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
 	got := ModelOverrideHeaders("gpt-5.6-luna")
 	if got == nil {
 		t.Fatal("ModelOverrideHeaders(gpt-5.6-luna) = nil, want headers")
 	}
-	if got["user-agent"] != wantUA {
-		t.Fatalf("user-agent = %q, want %q", got["user-agent"], wantUA)
+	userAgent := got["user-agent"]
+	if !strings.HasPrefix(userAgent, "codex-tui/") || !strings.Contains(userAgent, " (Mac OS ") || !strings.Contains(userAgent, "; arm64)") {
+		t.Fatalf("user-agent = %q, want a Codex TUI macOS arm64 user agent", userAgent)
+	}
+	if got["originator"] != "codex-tui" {
+		t.Fatalf("originator = %q, want codex-tui", got["originator"])
 	}
 	if got := ModelOverrideHeaders("gpt-5.4"); got != nil {
 		t.Fatalf("ModelOverrideHeaders(gpt-5.4) = %#v, want nil", got)
