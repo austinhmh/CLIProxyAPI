@@ -21,6 +21,7 @@ import (
 
 const priorityWarmupCompletedResponse = `{"id":"resp_test","object":"response","status":"completed","service_tier":"default","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 const priorityWarmupRequest = `{"model":"test-model","input":"hello","service_tier":"priority"}`
+const cursorPriorityWarmupRequest = `{"model":"test-model","input":[{"role":"user","content":"<user_info>state</user_info><ide_state description=\"snapshot\"><visible_files><file path=\"main.go\" /></visible_files></ide_state><code_selections description=\"selection\"><code_selection path=\"main.go\">return</code_selection></code_selections><future_context version=\"1\">opaque</future_context>"},{"role":"user","content":[{"type":"input_image","image_url":"https://example.test/image","detail":"high"},{"type":"input_text","text":"<system_reminder>agent</system_reminder><user_query>inspect image</user_query>"}]}],"service_tier":"priority"}`
 
 func newPriorityWarmupTestExecutor(endpoint string, enabled bool) (*OpenAICompatExecutor, *cliproxyauth.Auth) {
 	executor := NewOpenAICompatExecutor("compat", &config.Config{
@@ -138,6 +139,48 @@ func TestOpenAICompatPriorityCompletionGate(t *testing.T) {
 				}
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
+			}
+		})
+	}
+}
+
+func TestOpenAICompatPriorityWarmupSupportsWholeCursorRoot(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%t", streaming), func(t *testing.T) {
+			bodies := make(chan []byte, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				bodies <- body
+				if streaming {
+					writer.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":"+priorityWarmupCompletedResponse+"}\n\n")
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, priorityWarmupCompletedResponse)
+			}))
+			defer server.Close()
+
+			executor, auth := newPriorityWarmupTestExecutor(server.URL, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for requestNumber, wantPriority := range []bool{false, true} {
+				if _, err := executePriorityWarmupTest(ctx, executor, auth, cursorPriorityWarmupRequest, streaming, nil); err != nil {
+					t.Fatalf("request %d failed: %v", requestNumber+1, err)
+				}
+				select {
+				case body := <-bodies:
+					gotPriority := gjson.GetBytes(body, "service_tier").String() == "priority"
+					if gotPriority != wantPriority {
+						t.Fatalf("request %d upstream priority = %v, want %v", requestNumber+1, gotPriority, wantPriority)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
 			}
 		})
 	}

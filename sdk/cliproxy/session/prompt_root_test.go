@@ -31,7 +31,6 @@ func TestOpenAIResponsesPromptRootInvalidBoundary(t *testing.T) {
 		`null`, `[]`, `{}`, `{"input":""}`, `{"input":"hi"} {}`,
 		`{"input":[{"role":"assistant","content":"history"},{"role":"user","content":"hello"}]}`,
 		`{"input":[{"type":"item_reference","id":"previous"},{"role":"user","content":"hello"}]}`,
-		`{"input":[{"role":"user","content":"<user_info>state</user_info>extra"},{"role":"user","content":"<user_query>hello</user_query>"}]}`,
 		`{"input":[{"role":"user","content":"<user_info>state"}]}`,
 		`{"input":[{"role":"user","content":"<user_info>state</user_info><unknown>other</unknown>"}]}`,
 		`{"input":[{"role":"user","content":"<user_info>state</user_info>"}]}`,
@@ -93,5 +92,45 @@ func TestOpenAIResponsesPromptRootCursorFirstTurnChanges(t *testing.T) {
 	root := fingerprint("state", "query")
 	if root == "" || root == fingerprint("other", "query") || root == fingerprint("state", "other") {
 		t.Fatal("first-turn state/query must participate in root")
+	}
+}
+
+func TestOpenAIResponsesPromptRootUsesWholeCursorRoot(t *testing.T) {
+	buildInput := func(preambleDescription string) []any {
+		return []any{
+			map[string]any{
+				"role":    "user",
+				"content": "<user_info>state</user_info><ide_state description=\"" + preambleDescription + "\"><visible_files><file path=\"main.go\" /></visible_files></ide_state><code_selections description=\"selection\"><code_selection path=\"main.go\">return</code_selection></code_selections><future_context version=\"1\">opaque</future_context>",
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_image", "image_url": "https://example.test/image", "detail": "high"},
+					map[string]any{"type": "input_text", "text": "<system_reminder>agent</system_reminder><user_query>inspect image</user_query>"},
+				},
+			},
+		}
+	}
+	encodeInput := func(input []any) []byte {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"input": input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	initialInput := buildInput("snapshot")
+	appendedInput := append([]any{}, initialInput...)
+	appendedInput = append(appendedInput, map[string]any{"role": "assistant", "content": "done"})
+	root := OpenAIResponsesPromptRootFingerprint(encodeInput(initialInput))
+	if root == "" {
+		t.Fatal("Cursor prompt with dynamic wrappers and multimodal query should produce a root")
+	}
+	if root != OpenAIResponsesPromptRootFingerprint(encodeInput(appendedInput)) {
+		t.Fatal("appending later history changed the whole first-turn root")
+	}
+	if root == OpenAIResponsesPromptRootFingerprint(encodeInput(buildInput("changed"))) {
+		t.Fatal("changing the first-turn root content did not change its hash")
 	}
 }

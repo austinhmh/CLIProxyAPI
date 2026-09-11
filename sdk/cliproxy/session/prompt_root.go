@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// OpenAIResponsesPromptRootFingerprint identifies a content prefix, not a client session.
-// It never searches later conversation turns for a user_query marker.
+// OpenAIResponsesPromptRootFingerprint identifies the complete first-turn prompt root,
+// not a client session. Later conversation turns are excluded from the root.
 func OpenAIResponsesPromptRootFingerprint(payload []byte) string {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
@@ -73,24 +73,15 @@ func responsesPromptInputPrefix(input any) (any, bool) {
 			if !hasResponsesPromptContent(content) {
 				continue
 			}
-			text, textOnly := responsesPromptText(content)
+			text, _ := responsesPromptText(content)
 			trimmed := strings.TrimSpace(text)
-			if !cursorPreamble && textOnly && strings.HasPrefix(trimmed, "<user_info>") {
-				if !responsesCursorBlocks(trimmed, false) {
-					return nil, false
-				}
+			if !cursorPreamble && strings.HasPrefix(trimmed, "<user_info>") {
 				cursorPreamble = true
 				continue
 			}
 			if cursorPreamble {
-				if !textOnly {
-					return nil, false
-				}
-				if responsesCursorBlocks(trimmed, true) {
+				if hasNonEmptyResponsesUserQuery(trimmed) {
 					return items[:index+1], true
-				}
-				if responsesCursorBlocks(trimmed, false) {
-					continue
 				}
 				return nil, false
 			}
@@ -103,46 +94,19 @@ func responsesPromptInputPrefix(input any) (any, bool) {
 	return nil, false
 }
 
-// responsesCursorBlocks accepts complete outer wrappers only. Unknown wrappers
-// remain cold rather than guessing where a Cursor preamble ends.
-func responsesCursorBlocks(text string, requireQuery bool) bool {
-	seenBlock, seenQuery := false, false
-	for text = strings.TrimSpace(text); text != ""; text = strings.TrimSpace(text) {
-		if !strings.HasPrefix(text, "<") {
-			return false
-		}
-		openingEnd := strings.IndexByte(text, '>')
-		if openingEnd < 0 {
-			return false
-		}
-		name := text[1:openingEnd]
-		switch name {
-		case "user_query":
-			if !requireQuery || seenQuery {
-				return false
-			}
-			seenQuery = true
-		case "system_reminder":
-		case "user_info", "agent_transcripts", "rules", "agent_skills", "mcp_instructions", "attached_files":
-			if requireQuery {
-				return false
-			}
-		default:
-			return false
-		}
-		closing := "</" + name + ">"
-		closingStart := strings.Index(text[openingEnd+1:], closing)
-		if closingStart < 0 {
-			return false
-		}
-		contentEnd := openingEnd + 1 + closingStart
-		if name == "user_query" && strings.TrimSpace(text[openingEnd+1:contentEnd]) == "" {
-			return false
-		}
-		text = text[contentEnd+len(closing):]
-		seenBlock = true
+func hasNonEmptyResponsesUserQuery(text string) bool {
+	const openingTag = "<user_query>"
+	const closingTag = "</user_query>"
+	openingStart := strings.Index(text, openingTag)
+	if openingStart < 0 {
+		return false
 	}
-	return seenBlock && (!requireQuery || seenQuery)
+	contentStart := openingStart + len(openingTag)
+	closingOffset := strings.Index(text[contentStart:], closingTag)
+	if closingOffset < 0 {
+		return false
+	}
+	return strings.TrimSpace(text[contentStart:contentStart+closingOffset]) != ""
 }
 
 func responsesPromptText(content any) (string, bool) {
@@ -151,10 +115,16 @@ func responsesPromptText(content any) (string, bool) {
 		return value, true
 	case []any:
 		var text strings.Builder
+		textOnly := true
 		for _, rawPart := range value {
 			part, valid := rawPart.(map[string]any)
-			if !valid || (part["type"] != "input_text" && part["type"] != "text") {
+			if !valid {
 				return "", false
+			}
+			partType, _ := part["type"].(string)
+			if partType != "input_text" && partType != "text" {
+				textOnly = false
+				continue
 			}
 			partText, valid := part["text"].(string)
 			if !valid {
@@ -163,7 +133,7 @@ func responsesPromptText(content any) (string, bool) {
 			text.WriteString(partText)
 			text.WriteByte('\n')
 		}
-		return text.String(), true
+		return text.String(), textOnly
 	default:
 		return "", false
 	}
