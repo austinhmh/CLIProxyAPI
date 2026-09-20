@@ -340,10 +340,7 @@ func (s *Service) registerOpenAICompatProviderExecutor(providerKey string, auth 
 	if providerKey == "" {
 		providerKey = "openai-compatibility"
 	}
-	if s.openAICompatPriorityWarmupRuntime == nil {
-		s.openAICompatPriorityWarmupRuntime = executor.NewOpenAICompatPriorityWarmupRuntime()
-	}
-	compatExecutor := executor.NewOpenAICompatExecutorWithPriorityWarmupRuntime(providerKey, cfg, s.openAICompatPriorityWarmupRuntime)
+	compatExecutor := executor.NewOpenAICompatExecutor(providerKey, cfg)
 	nextExecutor := s.wrapOpenAICompatIfPluginAuth(compatExecutor, auth, cfg)
 	if !forceReplace {
 		if existingExecutor, hasExecutor := s.coreManager.Executor(providerKey); hasExecutor {
