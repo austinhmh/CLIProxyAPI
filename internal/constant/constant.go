@@ -19,6 +19,9 @@ const (
 	// OpenAI represents the OpenAI provider identifier.
 	OpenAI = "openai"
 
+	// OpenAIEmbedding represents the OpenAI embeddings request and response format.
+	OpenAIEmbedding = "openai-embedding"
+
 	// OpenaiResponse represents the OpenAI response format identifier.
 	OpenaiResponse = "openai-response"
 

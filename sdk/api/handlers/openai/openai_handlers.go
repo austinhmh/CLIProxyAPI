@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -177,6 +178,82 @@ func (h *OpenAIAPIHandler) Completions(c *gin.Context) {
 		h.handleCompletionsNonStreamingResponse(c, rawJSON)
 	}
 
+}
+
+// Embeddings handles the OpenAI-compatible /v1/embeddings endpoint.
+func (h *OpenAIAPIHandler) Embeddings(c *gin.Context) {
+	rawJSON, errRead := handlers.ReadRequestBody(c)
+	if errRead != nil || !json.Valid(rawJSON) {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Invalid embeddings request body",
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	modelName := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
+	if modelName == "" {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "The model field is required for embeddings",
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	providerName := openAIEmbeddingProvider(modelName)
+	if providerName == "" {
+		c.JSON(http.StatusNotImplemented, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: fmt.Sprintf("model %s does not support embeddings through an OpenAI-compatible provider", modelName),
+				Type:    "not_supported_error",
+			},
+		})
+		return
+	}
+
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+	stopKeepAlive := h.StartNonStreamingKeepAlive(c, cliCtx)
+	execution, errMsg := h.ExecuteProtocolWithAuthManager(cliCtx, handlers.ProtocolExecutionRequest{
+		EntryProtocol:  OpenAIEmbedding,
+		ExitProtocol:   OpenAIEmbedding,
+		ForcedProvider: providerName,
+		Model:          modelName,
+		Body:           rawJSON,
+		Stream:         false,
+	})
+	stopKeepAlive()
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		if errMsg.Error != nil {
+			cliCancel(errMsg.Error)
+		} else {
+			cliCancel(nil)
+		}
+		return
+	}
+
+	c.Header("Content-Type", "application/json")
+	handlers.WriteUpstreamHeaders(c.Writer.Header(), execution.Headers)
+	_, _ = c.Writer.Write(execution.Body)
+	cliCancel(nil)
+}
+
+func openAIEmbeddingProvider(modelName string) string {
+	modelRegistry := registry.GetGlobalRegistry()
+	for _, provider := range modelRegistry.GetModelProviders(modelName) {
+		normalizedProvider := strings.ToLower(strings.TrimSpace(provider))
+		modelInfo := modelRegistry.GetModelInfo(modelName, provider)
+		if normalizedProvider == "openai-compatibility" ||
+			strings.HasPrefix(normalizedProvider, "openai-compatible-") ||
+			(modelInfo != nil && strings.EqualFold(strings.TrimSpace(modelInfo.Type), "openai-compatibility")) {
+			return provider
+		}
+	}
+	return ""
 }
 
 // convertCompletionsRequestToChatCompletions converts OpenAI completions API request to chat completions format.

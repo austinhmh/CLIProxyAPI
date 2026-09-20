@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
@@ -920,6 +921,51 @@ func TestOpenAICompatExecutorImagesGenerationsPassthrough(t *testing.T) {
 	}
 	if got := gjson.GetBytes(resp.Payload, "data.0.b64_json").String(); got != "AA==" {
 		t.Fatalf("response payload = %s", string(resp.Payload))
+	}
+}
+
+func TestOpenAICompatExecutorEmbeddingsPassthrough(t *testing.T) {
+	var gotPath string
+	var gotAuthorization string
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuthorization = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1,0.2],"index":0}],"model":"text-embedding-3-small","usage":{"prompt_tokens":2,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"base_url": server.URL + "/v1",
+		"api_key":  "test",
+	}}
+	resp, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "text-embedding-3-small",
+		Payload: []byte(`{"model":"embedding-alias","input":["hello","world"]}`),
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString(constant.OpenAIEmbedding),
+		Stream:       false,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if gotPath != "/v1/embeddings" {
+		t.Fatalf("path = %q, want %q", gotPath, "/v1/embeddings")
+	}
+	if gotAuthorization != "Bearer test" {
+		t.Fatalf("authorization = %q, want Bearer test", gotAuthorization)
+	}
+	if got := gjson.GetBytes(gotBody, "model").String(); got != "text-embedding-3-small" {
+		t.Fatalf("model = %q, want text-embedding-3-small; body=%s", got, string(gotBody))
+	}
+	if got := gjson.GetBytes(gotBody, "input.0").String(); got != "hello" {
+		t.Fatalf("input.0 = %q, want hello; body=%s", got, string(gotBody))
+	}
+	if got := gjson.GetBytes(resp.Payload, "data.0.embedding.1").Float(); got != 0.2 {
+		t.Fatalf("response embedding = %s", string(resp.Payload))
 	}
 }
 
