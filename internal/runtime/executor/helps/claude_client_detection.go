@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/tidwall/gjson"
 )
 
@@ -75,23 +75,17 @@ const (
 	claudeCodeHelperShapeNone claudeCodeHelperShape = iota
 	claudeCodeHelperShapeMinimal
 	claudeCodeHelperShapeStructured
+	claudeCodeHelperShapeTitle280
 
 	claudeCodeHelperModel = "claude-haiku-4-5-20251001"
 )
 
-// These are the seven exact beta sequences observed across markerless native
-// Claude Code Haiku helper requests: six from 14 requests captured on 2.1.220,
-// plus the 2.1.258 session-title helper captured on 2026-09-02, which carries
-// advisor-tool without cache-diagnosis whenever the account's advisor feature
-// flag is on. Keeping the allowlist exact avoids turning the helper exception
-// into a generic no-claude-code-beta bypass.
-// claudeCodeHelperBetaProfilesSince258Structured was first observed on 2.1.258
-// and is not accepted while the configured baseline predates it.
-var claudeCodeHelperBetaProfilesSince258Structured = claudeCodeHelperBetaProfile(true,
-	"advisor-tool-2026-03-01",
-	"structured-outputs-2025-12-15",
-)
-
+// These are the exact beta sequences observed on markerless native Haiku
+// helper requests. The first six are Claude Code 2.1.220. The last is the
+// 2.1.280 title helper captured 2026-09-23: structured output, then
+// server-side fallback, fallback credit, and cache diagnosis. Keeping the
+// allowlist exact avoids turning the helper exception into a generic
+// no-claude-code-beta bypass.
 var measuredClaudeCodeHelperBetaProfiles = map[string]claudeCodeHelperShape{
 	claudeCodeHelperBetaProfile(true):  claudeCodeHelperShapeMinimal,
 	claudeCodeHelperBetaProfile(false): claudeCodeHelperShapeMinimal,
@@ -111,6 +105,12 @@ var measuredClaudeCodeHelperBetaProfiles = map[string]claudeCodeHelperShape{
 	claudeCodeHelperBetaProfile(false,
 		"structured-outputs-2025-12-15",
 	): claudeCodeHelperShapeStructured,
+	claudeCodeHelperBetaProfile(true,
+		"structured-outputs-2025-12-15",
+		"server-side-fallback-2026-06-01",
+		"fallback-credit-2026-06-01",
+		"cache-diagnosis-2026-04-07",
+	): claudeCodeHelperShapeTitle280,
 }
 
 // ClaudeCodeRequestDetection records the strong signals and first-party
@@ -288,36 +288,24 @@ func measuredClaudeCodeHelperHeadersMatch(headers http.Header, cfg *config.Confi
 	if !meetsClaudeDeviceProfileBaseline(candidate, profile) {
 		return false
 	}
-	// Two measured transport envelopes, selected by the configured baseline so
-	// an operator who pins claude-header-defaults to 2.1.220 keeps recognising
-	// genuine 2.1.220 helpers.
-	//
-	// 2.1.220 (@anthropic-ai/sdk 0.94.0): the structured streaming helper sent
-	// X-Stainless-Async: async with the full compression set, the minimal probe
-	// sent no async header and gzip only, and both carried a UUID
-	// x-client-request-id.
-	//
-	// 2.1.258 (@anthropic-ai/sdk 0.112.1), measured 2026-09-02 on the quota
-	// probe and the session-title helper: X-Stainless-Async is never sent, both
-	// shapes offer the full compression set, and x-client-request-id is attached
-	// only when the base URL is api.anthropic.com, which a request that reached
-	// CPA never is.
-	async := headerValue(headers, "X-Stainless-Async")
-	compression := headerValue(headers, "Accept-Encoding")
-	requestID := headerValue(headers, "X-Client-Request-Id")
-	if claudeProfileUsesLegacyWire(profile) {
-		if (shape == claudeCodeHelperShapeStructured && async != "async") ||
-			(shape == claudeCodeHelperShapeMinimal && async != "") {
-			return false
-		}
-		if (shape == claudeCodeHelperShapeStructured && compression != "gzip, deflate, br, zstd") ||
-			(shape == claudeCodeHelperShapeMinimal && compression != "gzip") {
-			return false
-		}
-		_, errRequestID := uuid.Parse(requestID)
-		return errRequestID == nil
+	// Claude Code 2.1.258 (@anthropic-ai/sdk 0.112.1), measured 2026-09-02 on the
+	// quota probe and the session-title helper: X-Stainless-Async is never sent
+	// and both shapes offer the full compression set. x-client-request-id is
+	// attached only when the client's base URL is api.anthropic.com, so a client
+	// pointed at CPA through ANTHROPIC_BASE_URL sends none while one that reaches
+	// CPA through a transparent proxy still carries the UUID; both are accepted.
+	if headerValue(headers, "X-Stainless-Async") != "" {
+		return false
 	}
-	return async == "" && compression == "gzip, deflate, br, zstd" && requestID == ""
+	if headerValue(headers, "Accept-Encoding") != "gzip, deflate, br, zstd" {
+		return false
+	}
+	if requestID := headerValue(headers, "X-Client-Request-Id"); requestID != "" {
+		if _, errRequestID := uuid.Parse(requestID); errRequestID != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func measuredClaudeCodeHelperSessionMatches(headers http.Header, payload []byte) bool {
@@ -345,12 +333,17 @@ func measuredClaudeCodeHelperSessionMatches(headers http.Header, payload []byte)
 func measuredClaudeCodeHelperBodyShape(payload []byte) claudeCodeHelperShape {
 	minimalKeys := []string{"model", "max_tokens", "messages", "metadata"}
 	structuredKeys := []string{"model", "messages", "system", "tools", "metadata", "max_tokens", "thinking", "temperature", "output_config", "stream"}
+	structuredTitle280Keys := []string{"model", "max_tokens", "messages", "metadata", "output_config"}
 	shape := claudeCodeHelperShapeNone
+	isTitle280 := false
 	switch {
 	case claudeJSONObjectHasKeys(payload, minimalKeys):
 		shape = claudeCodeHelperShapeMinimal
 	case claudeJSONObjectHasKeys(payload, structuredKeys):
 		shape = claudeCodeHelperShapeStructured
+	case claudeJSONObjectHasKeys(payload, structuredTitle280Keys):
+		shape = claudeCodeHelperShapeTitle280
+		isTitle280 = true
 	default:
 		return claudeCodeHelperShapeNone
 	}
@@ -372,6 +365,22 @@ func measuredClaudeCodeHelperBodyShape(payload []byte) claudeCodeHelperShape {
 
 	if shape == claudeCodeHelperShapeMinimal {
 		if maxTokens.Raw != "1" || message.Get("content").Type != gjson.String {
+			return claudeCodeHelperShapeNone
+		}
+		return shape
+	}
+
+	if isTitle280 {
+		outputConfig := gjson.GetBytes(payload, "output_config")
+		format := outputConfig.Get("format")
+		schema := format.Get("schema")
+		if maxTokens.Raw != "80" ||
+			message.Get("content").Type != gjson.String ||
+			!claudeJSONObjectHasKeys([]byte(outputConfig.Raw), []string{"format"}) ||
+			!claudeJSONObjectHasKeys([]byte(format.Raw), []string{"type", "schema"}) ||
+			format.Get("type").String() != "json_schema" ||
+			!claudeJSONObjectHasKeys([]byte(schema.Raw), []string{"type"}) ||
+			schema.Get("type").String() != "object" {
 			return claudeCodeHelperShapeNone
 		}
 		return shape
@@ -499,6 +508,7 @@ func plausibleClaudeCodeUserAgent(userAgent string, cfg *config.Config) bool {
 	}
 	candidate, okCandidate := parseClaudeCLIVersion(userAgent)
 	baseline, okBaseline := parseClaudeCLIVersion(defaultClaudeDeviceProfile(cfg).UserAgent)
+	// Patch releases (>= baseline.patch) within the release line preserve native passthrough.
 	return okCandidate && okBaseline && plausibleClaudeCLIVersion(candidate, baseline)
 }
 

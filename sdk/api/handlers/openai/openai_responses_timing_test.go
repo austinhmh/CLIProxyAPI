@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	requestlogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	requestlogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )
 
 type failingResponsesTimingWriter struct{}

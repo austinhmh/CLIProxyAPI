@@ -10,8 +10,7 @@ import (
 	"testing"
 	"time"
 
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 type recordingCooldownStateStore struct {
@@ -262,66 +261,66 @@ func TestManager_MarkResult_PersistsCooldownOnlyWhenStateChanges(t *testing.T) {
 	}
 }
 
-func TestManager_ReconcileRegistryModelStates_PersistsCooldownRemoval(t *testing.T) {
+func TestManager_Update_ClearsPersistedCooldownWhenCredentialsChange(t *testing.T) {
 	store := &recordingCooldownStateStore{}
 	manager := NewManager(nil, nil, nil)
 	manager.SetCooldownStateStore(store)
 
-	auth := &Auth{ID: "auth-reconcile-cooldown", Provider: "xai", Status: StatusActive}
-	model := "grok-4"
-	reg := registry.GetGlobalRegistry()
-	reg.RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: model}})
-	t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
-
+	auth := &Auth{
+		ID:       "auth-codex-1",
+		Provider: "codex",
+		Status:   StatusActive,
+		Metadata: map[string]any{
+			"access_token": "token-1",
+		},
+	}
 	if _, errRegister := manager.Register(WithSkipPersist(context.Background()), auth); errRegister != nil {
 		t.Fatalf("Register() returned error: %v", errRegister)
 	}
+
+	// 1. Fail with 401 unauthorized
 	manager.MarkResult(context.Background(), Result{
 		AuthID:   auth.ID,
-		Provider: auth.Provider,
-		Model:    model,
+		Provider: "codex",
+		Model:    "gpt-6-astra",
 		Success:  false,
-		Error:    &Error{Message: "upstream unavailable", HTTPStatus: 500},
+		Error:    &Error{Message: "invalidated token", HTTPStatus: 401},
 	})
-	if got := store.saveCount.Load(); got != 1 {
-		t.Fatalf("cooldown failure saved state %d times, want 1", got)
-	}
-	store.mu.Lock()
-	recordsBeforeReconcile := cloneCooldownStateRecords(store.records)
-	store.mu.Unlock()
-	if len(recordsBeforeReconcile) != 2 {
-		t.Fatalf("records before reconcile = %+v, want aggregate and model cooldowns", recordsBeforeReconcile)
-	}
-	foundModelCooldown := false
-	for _, record := range recordsBeforeReconcile {
-		if record.Model == model {
-			foundModelCooldown = true
-			break
-		}
-	}
-	if !foundModelCooldown {
-		t.Fatalf("records before reconcile = %+v, want cooldown for model %q", recordsBeforeReconcile, model)
+	if len(store.savedRecords()) == 0 {
+		t.Fatal("expected cooldown record to be saved after unauthorized failure")
 	}
 
-	expiredAt := time.Now().Add(-time.Minute)
-	manager.mu.Lock()
-	if current := manager.auths[auth.ID]; current != nil {
-		current.NextRetryAfter = expiredAt
-		if state := current.ModelStates[model]; state != nil {
-			state.NextRetryAfter = expiredAt
-		}
+	// 2. Update without credential change (e.g. metadata note update)
+	sameCredAuth := &Auth{
+		ID:       auth.ID,
+		Provider: "codex",
+		Status:   StatusActive,
+		Metadata: map[string]any{
+			"access_token": "token-1",
+			"note":         "updated note",
+		},
 	}
-	manager.mu.Unlock()
+	if _, errUpdate := manager.Update(WithSkipPersist(context.Background()), sameCredAuth); errUpdate != nil {
+		t.Fatalf("Update() returned error: %v", errUpdate)
+	}
+	if len(store.savedRecords()) == 0 {
+		t.Fatal("expected cooldown record to remain when credentials did not change")
+	}
 
-	manager.ReconcileRegistryModelStates(context.Background(), auth.ID)
-	if got := store.saveCount.Load(); got != 2 {
-		t.Fatalf("reconcile saved state %d times, want 2", got)
+	// 3. Update with credential change (new access_token)
+	newCredAuth := &Auth{
+		ID:       auth.ID,
+		Provider: "codex",
+		Status:   StatusActive,
+		Metadata: map[string]any{
+			"access_token": "token-2",
+		},
 	}
-	store.mu.Lock()
-	recordsAfterReconcile := cloneCooldownStateRecords(store.records)
-	store.mu.Unlock()
-	if len(recordsAfterReconcile) != 0 {
-		t.Fatalf("records after reconcile = %+v, want no stale cooldown", recordsAfterReconcile)
+	if _, errUpdate := manager.Update(WithSkipPersist(context.Background()), newCredAuth); errUpdate != nil {
+		t.Fatalf("Update() returned error: %v", errUpdate)
+	}
+	if len(store.savedRecords()) != 0 {
+		t.Fatalf("expected cooldown records to be cleared after credential change, got %d records", len(store.savedRecords()))
 	}
 }
 
