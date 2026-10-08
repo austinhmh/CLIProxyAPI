@@ -908,6 +908,24 @@ func (b *StreamUsageBuffer) ObserveOpenAIStream(line []byte) {
 	b.Observe(detail, usageOK || detail.ResponseServiceTier != "")
 }
 
+// ObserveResponsesStream records usage and service tier from Responses events.
+func (b *StreamUsageBuffer) ObserveResponsesStream(line []byte) {
+	if b == nil {
+		return
+	}
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return
+	}
+	if b.responseModel == "" {
+		if model, _ := extractGenericResponseModelEvent(payload); model != "" {
+			b.responseModel = model
+		}
+	}
+	detail, ok := ParseResponsesUsage(payload)
+	b.Observe(detail, ok)
+}
+
 // ObserveClaudeStream records and merges usage from a Claude SSE line.
 func (b *StreamUsageBuffer) ObserveClaudeStream(line []byte) {
 	if b == nil {

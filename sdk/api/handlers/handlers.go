@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -599,7 +600,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 }
 
 func normalizeClaudeIdentityBeforeAuth(entryProtocol string, req coreexecutor.Request, opts coreexecutor.Options) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
-	if entryProtocol != Claude {
+	if entryProtocol != constant.Claude {
 		return req, opts, nil
 	}
 	payload := req.Payload

@@ -298,13 +298,15 @@ func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 	newRetry := 0
 	oldDisableCooling := false
 	newDisableCooling := true
+	oldWebsockets := false
+	newWebsockets := true
 	oldCfg := &config.Config{XAIKey: []config.XAIKey{{
 		APIKey:         "old-key",
 		Priority:       1,
 		Prefix:         "old",
 		BaseURL:        "https://old.example.com/v1",
 		ProxyURL:       "http://old-proxy",
-		Websockets:     boolPtr(false),
+		Websockets:     &oldWebsockets,
 		DisableCooling: &oldDisableCooling,
 		RequestRetry:   &oldRetry,
 		Headers:        map[string]string{"X-Test": "old"},
@@ -317,7 +319,7 @@ func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 		Prefix:         "new",
 		BaseURL:        "https://new.example.com/v1",
 		ProxyURL:       "http://new-proxy",
-		Websockets:     boolPtr(true),
+		Websockets:     &newWebsockets,
 		DisableCooling: &newDisableCooling,
 		RequestRetry:   &newRetry,
 		Headers:        map[string]string{"X-Test": "new"},

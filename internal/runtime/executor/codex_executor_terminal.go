@@ -310,11 +310,11 @@ func codexTerminalErrorIsContextLength(body []byte) bool {
 		strings.Contains(message, "too many tokens")
 }
 
-func newCodexStatusErr(statusCode int, body []byte) statusErr {
-	return newCodexStatusErrWithCooling(statusCode, body, false)
+func newCodexStatusErr(statusCode int, body []byte, responseHeaders ...http.Header) statusErr {
+	return newCodexStatusErrWithCooling(statusCode, body, false, responseHeaders...)
 }
 
-func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling bool) statusErr {
+func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling bool, responseHeaders ...http.Header) statusErr {
 	errCode := statusCode
 	isUsageLimit := isCodexUsageLimitError(body)
 	credentialScoped := isUsageLimit && !modelLevelCooling
@@ -322,6 +322,10 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 		errCode = http.StatusTooManyRequests
 	}
 	body = classifyCodexStatusError(errCode, body)
+	var headers http.Header
+	if len(responseHeaders) > 0 {
+		headers = responseHeaders[0].Clone()
+	}
 	err := statusErr{code: errCode, msg: string(body), headers: headers, credentialScoped: credentialScoped}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter

@@ -22,6 +22,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
 func TestParseOpenAIUsageChatCompletions(t *testing.T) {
@@ -1340,7 +1341,7 @@ func (TestUsageExecutor) Identifier() string {
 }
 
 func TestUsageReporterPropagatesSessionHierarchy(t *testing.T) {
-	ctx := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
+	ctx := logging.WithClientRequestMetadata(context.Background(), logging.ClientRequestMetadata{
 		SessionID:       "claude:sess-1:agent:sub-1",
 		ParentSessionID: "claude:sess-1",
 	})
@@ -1373,7 +1374,7 @@ func TestUsageReporterPropagatesSessionHierarchy(t *testing.T) {
 	}
 
 	// Test cross-prefix alias rejection (e.g. pck:* and conv:* are aliases, not parent-child)
-	ctxAlias := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
+	ctxAlias := logging.WithClientRequestMetadata(context.Background(), logging.ClientRequestMetadata{
 		SessionID:       "pck:prompt-key-123",
 		ParentSessionID: "conv:conv-456",
 	})

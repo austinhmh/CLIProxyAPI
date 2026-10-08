@@ -316,7 +316,7 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 					Prefix:               "dev",
 					BaseURL:              "https://api.openai.com",
 					ProxyURL:             "http://proxy.local",
-					Websockets:           true,
+					Websockets:           boolPointer(true),
 					AlphaSearch:          true,
 					DisableCooling:       boolPointer(true),
 					DisableCodexCloaking: boolPointer(true),

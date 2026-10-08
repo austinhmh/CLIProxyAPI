@@ -1545,7 +1545,15 @@ func applyCloaking(
 	cchSigning bool,
 	sessionIDs ...string,
 ) ([]byte, bool, error) {
-	return applyCloakingInternal(ctx, cfg, auth, payload, apiKey, confirmedClaudeCode, cchSigning, true, sessionIDs...)
+	if ctx != nil {
+		for _, sessionID := range sessionIDs {
+			if strings.TrimSpace(sessionID) != "" {
+				ctx = helps.WithClaudeSessionID(ctx, sessionID)
+				break
+			}
+		}
+	}
+	return applyCloakingInternal(ctx, cfg, auth, payload, apiKey, confirmedClaudeCode, cchSigning, true)
 }
 
 func applyCloakingInternal(
@@ -1651,10 +1659,9 @@ func applyCloakingInternal(
 	// is applied later through the shared ApplyClaudeCredentialMetadata path.
 	// Other non-OAuth cloaking keeps the legacy per-request fake user_id.
 	if !policy.ProfileClaudeCodeCLI {
-		if len(sessionIDs) == 0 {
-			if sessionID := helps.ClaudeSessionIDFromContext(ctx); sessionID != "" {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
+		var sessionIDs []string
+		if sessionID := helps.ClaudeSessionIDFromContext(ctx); sessionID != "" {
+			sessionIDs = append(sessionIDs, sessionID)
 		}
 		var errFakeUserID error
 		payload, errFakeUserID = injectFakeUserID(ctx, payload, apiKey, settings.cacheUserID, sessionIDs...)

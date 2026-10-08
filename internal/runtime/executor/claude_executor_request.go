@@ -463,31 +463,6 @@ func claudeThinkingDisplayUpdates(body []byte) bool {
 	return display.Type == gjson.String && strings.EqualFold(strings.TrimSpace(display.String()), "updates")
 }
 
-// claudeBodyUsesAdvancedToolUse reports whether the request needs
-// advanced-tool-use-2025-11-20. Claude Code 2.1.258 adds the beta only while
-// tool search is active, which puts a tool_search_tool_* server tool and
-// defer_loading tools on the wire; plain tool declarations no longer carry it
-// (measured 2026-09-02: 158 inline tools, no beta). Tool use examples
-// (input_examples) and programmatic tool calling (allowed_callers) sit behind
-// the same beta and are just as visible in the body, so callers using them keep
-// working without requesting the beta explicitly.
-func claudeBodyUsesAdvancedToolUse(body []byte) bool {
-	tools := gjson.GetBytes(body, "tools")
-	if !tools.IsArray() {
-		return false
-	}
-	for _, tool := range tools.Array() {
-		toolType := strings.ToLower(strings.TrimSpace(tool.Get("type").String()))
-		if strings.HasPrefix(toolType, "tool_search_tool_") {
-			return true
-		}
-		if tool.Get("defer_loading").Bool() || tool.Get("input_examples").Exists() || tool.Get("allowed_callers").Exists() {
-			return true
-		}
-	}
-	return false
-}
-
 // claudeBodyHasAdvisorTool reports whether the request body declares an
 // advisor server tool.
 func claudeBodyHasAdvisorTool(body []byte) bool {
@@ -1167,11 +1142,9 @@ func applyClaudeHeadersWithNativeProfile(
 	countTokens := r.URL != nil && strings.HasSuffix(r.URL.Path, "/count_tokens")
 	requestedMap := claudeRequestedBetas(incomingBetas, extraBetas)
 	advisorNeeded := requestedMap[claudeAdvisorToolBeta] || claudeBodyHasAdvisorTool(body)
-	legacyWire := helps.ClaudeBaselineUsesLegacyWire(cfg)
-
 	baseBetas := incomingBetas
 	if !preserveCallerFingerprint {
-		baseBetas = claudeCodeCLIBetas(body, requestedMap, useOAuthBetas, legacyWire)
+		baseBetas = claudeCodeCLIBetas(body, requestedMap, useOAuthBetas)
 		if countTokens {
 			baseBetas = claudeCountTokensBetasForCredential(useOAuthBetas)
 			if advisorNeeded {
