@@ -254,7 +254,11 @@ func TestIssue6332MiddlewareFlushError(t *testing.T) {
 				if !c.Writer.Written() {
 					t.Error("flush did not commit Gin headers")
 				}
-				_, _ = c.Writer.Write([]byte("data: logged-response\n\n"))
+				payload := []byte("data: logged-response\n\n")
+				written, errWrite := c.Writer.Write(payload)
+				if errWrite != nil || written != len(payload) {
+					t.Errorf("write after failed flush: written=%d error=%v", written, errWrite)
+				}
 			})
 			writer := &issue6332Writer{ResponseRecorder: httptest.NewRecorder(), cancel: func() {}, failFlush: true}
 			router.ServeHTTP(writer, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"stream":true}`)))

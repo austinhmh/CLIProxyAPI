@@ -142,7 +142,7 @@ func logClaudeSignatureSanitizeReport(ctx context.Context, baseModel string, rep
 const defaultModelMaxTokens = 1024
 
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
-	return &ClaudeExecutor{cfg: cfg, oauthToolAliases: &claudeOAuthToolAliasStore{}}
+	return &ClaudeExecutor{cfg: cfg, oauthToolAliases: &claudeOAuthToolAliasStore{}, promptCacheRuntime: NewClaudePromptCacheRuntime()}
 }
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }

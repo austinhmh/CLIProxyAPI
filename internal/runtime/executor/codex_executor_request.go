@@ -137,6 +137,9 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	}
 	rawJSON = helps.SanitizeCodexInputItemIDs(rawJSON)
 	rawJSON = helps.FinalizePayload(ctx, rawJSON)
+	if strings.HasSuffix(url, "/responses/compact") {
+		rawJSON = stripUnsupportedCodexCompactFields(rawJSON)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
 	if err != nil {
 		return nil, nil, err

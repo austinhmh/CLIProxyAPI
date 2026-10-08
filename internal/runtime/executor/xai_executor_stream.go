@@ -97,13 +97,16 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 				streamUsage.PublishFailure(ctx, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 			}
 			var chunks [][]byte
+			terminalEvent := false
 			for _, line := range lines {
 				if bytes.HasPrefix(line, xaiDataTag) {
 					eventData := bytes.TrimSpace(line[len(xaiDataTag):])
-					switch gjson.GetBytes(eventData, "type").String() {
+					eventType := gjson.GetBytes(eventData, "type").String()
+					switch eventType {
 					case "response.output_item.done":
 						xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
 					case "response.completed", "response.incomplete":
+						terminalEvent = true
 						// Reconstruct only after the bridge has restored dispatcher children.
 						eventData = xaiPatchCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
 						eventData = xaiNormalizeReasoningSummaryData(eventData)
@@ -113,6 +116,8 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 						}
 						ending := line[len(bytes.TrimRight(line, "\r\n")):]
 						line = append(append([]byte("data: "), eventData...), ending...)
+					case "response.done":
+						terminalEvent = true
 					}
 				}
 				chunks = append(chunks, helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, line, &param, claudeInputTokens)...)
@@ -137,6 +142,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 				}
 				return false
 			}
+			completed = completed || terminalEvent
 			return true
 		}
 		for scanner.Scan() {
