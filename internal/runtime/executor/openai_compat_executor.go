@@ -466,6 +466,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			return nil, err
 		}
 	}
+	var applyPatch *helps.ApplyPatchResponsesState
+	if useNativeResponses && helps.ApplyPatchRequested(originalPayload) {
+		applyPatch = helps.NewApplyPatchResponsesState(from, originalPayload, originalTranslated)
+		translated, err = helps.NormalizeApplyPatchResponsesRequest(translated, originalPayload)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Request usage data in the final streaming chunk so that token statistics
 	// are captured even when the upstream is an OpenAI-compatible provider.
@@ -540,7 +548,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 		var param any
-		helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, &param)
+		if applyPatch == nil {
+			helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, &param)
+		}
 		var streamUsage helps.StreamUsageBuffer
 		var seenTerminal bool
 		var seenDone bool
@@ -610,22 +620,53 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
-			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, streamLine, &param, claudeInputTokens)
-			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
-			for i := range chunks {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
-					if bytes.Contains(chunks[i], []byte("data: [DONE]")) {
-						seenDone = true
+			var responseLines [][]byte
+			if useNativeResponses {
+				streamLine = append(streamLine, '\n', '\n')
+				if eventName != "" {
+					eventLine := []byte("event: " + eventName + "\n")
+					if applyPatch != nil {
+						_, _ = applyPatch.Stream(eventLine)
+					} else {
+						responseLines = append(responseLines, eventLine)
 					}
-				case <-ctx.Done():
-					streamAborted = true
+				}
+			}
+			if applyPatch != nil {
+				bridgedLines, errBridge := applyPatch.Stream(streamLine)
+				if errBridge != nil {
+					publishStreamError(statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}, false)
 					return true
+				}
+				responseLines = append(responseLines, bridgedLines...)
+			} else {
+				responseLines = append(responseLines, streamLine)
+			}
+			for _, responseLine := range responseLines {
+				chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, responseLine, &param, claudeInputTokens)
+				helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+				for _, chunk := range chunks {
+					select {
+					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+						if bytes.Contains(chunk, []byte("data: [DONE]")) {
+							seenDone = true
+						}
+					case <-ctx.Done():
+						streamAborted = true
+						return true
+					}
 				}
 			}
 			if helps.ApplyPatchTranslationError(param) != nil {
 				publishStreamError(statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}, false)
 				return true
+			}
+			if useNativeResponses {
+				eventType := gjson.GetBytes(dataPayload, "type").String()
+				if eventType == "response.completed" || eventType == "response.done" {
+					seenDone = true
+					seenTerminal = true
+				}
 			}
 			if isDone {
 				seenTerminal = true
@@ -670,6 +711,22 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		errScan := scanner.Err()
 		if errScan == nil && !seenTerminal && !streamFailed && !streamAborted && len(frameData) > 0 {
 			_ = processFrame()
+		}
+		if applyPatch != nil && !streamFailed && !streamAborted {
+			finalLines, errBridge := applyPatch.FinishStream()
+			for _, finalLine := range finalLines {
+				for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, finalLine, &param, claudeInputTokens) {
+					select {
+					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+					case <-ctx.Done():
+						streamAborted = true
+					}
+				}
+			}
+			if errBridge != nil && !streamAborted {
+				publishStreamError(statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}, false)
+				return
+			}
 		}
 		if !streamFailed && !streamAborted && helps.EndApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
 			return
