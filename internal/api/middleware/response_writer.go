@@ -118,6 +118,9 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 
 // FlushError forwards transport errors without bypassing inner middleware.
 func (w *ResponseWriterWrapper) FlushError() error {
+	if !w.headerWritten {
+		w.WriteHeader(http.StatusOK)
+	}
 	return httpwire.FlushResponse(w.ResponseWriter)
 }
 

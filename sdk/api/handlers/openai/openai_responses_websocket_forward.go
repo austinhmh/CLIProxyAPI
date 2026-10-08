@@ -253,6 +253,9 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 					if opts.timingTurn != nil {
 						opts.timingTurn.MarkOnce(requestlogging.TimingStageDownstreamCompleted, requestlogging.RequestTimingEventDetails{Outcome: eventType})
 					}
+					if opts.duplexStream != nil && opts.duplexStream() {
+						continue
+					}
 					cancel(nil)
 					return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), nil, nil
 				}

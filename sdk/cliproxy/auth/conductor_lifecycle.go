@@ -295,6 +295,11 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 			}
 		}
 	}
+	replacementContainsCredential := authAccessToken(auth) != "" || authHasRefreshCredential(auth) ||
+		strings.TrimSpace(auth.Attributes[AttributeAPIKey]) != "" || authMetadataString(auth, "api_key") != ""
+	if !credChanged || !replacementContainsCredential {
+		preserveActiveCredentialCooldown(existing, auth, now)
+	}
 	auth.UpdatedAt = now
 	cooldownStateChanged = normalizeModelStates(auth) || cooldownStateChanged
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {

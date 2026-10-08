@@ -745,6 +745,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 	deliveryCtx, finishDelivery := usage.WithStreamDelivery(context.Background())
 	defer finishDelivery(context.Canceled)
 	cliCtx, cancelExecution := h.GetContextWithCancel(h, c, deliveryCtx)
+	cliCtx = cliproxyexecutor.WithPreferUpstreamWebsocket(cliCtx)
 	cliCancel := func(err error) {
 		finishDelivery(err)
 		cancelExecution(err)
