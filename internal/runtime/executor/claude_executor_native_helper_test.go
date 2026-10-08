@@ -28,7 +28,7 @@ const (
 func claudeNativeHelperHeaders(betas, compression string) http.Header {
 	headers := http.Header{
 		"Accept":            {"application/json"},
-		"Accept-Encoding":   {acceptEncoding},
+		"Accept-Encoding":   {compression},
 		"Content-Type":      {"application/json"},
 		"User-Agent":        {"claude-cli/2.1.280 (external, cli)"},
 		"X-App":             {"cli"},

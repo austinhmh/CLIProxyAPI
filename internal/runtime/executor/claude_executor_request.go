@@ -176,7 +176,8 @@ func isManagedClaudeBeta(beta string) bool {
 //
 // An empty body keeps the optimistic role=system default, matching the cloaking
 // policy for unknown and future model IDs.
-func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool) string {
+func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool, legacyWire ...bool) string {
+	isLegacyWire := len(legacyWire) > 0 && legacyWire[0]
 	betas := make([]string, 0, len(claudeCodeCLIConstantBetas)+len(claudeCodeTrailingBetas)+10)
 	betas = append(betas, claudeCodeBeta)
 	if oauthToken {
@@ -219,7 +220,12 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	if requested[claudeAdvisorToolBeta] || claudeBodyHasAdvisorTool(body) {
 		betas = append(betas, claudeAdvisorToolBeta)
 	}
-	if requested[claudeAdvancedToolUseBeta] || claudeBodyUsesAdvancedToolUse(body) {
+	advancedToolUse := requested[claudeAdvancedToolUseBeta] || claudeBodyUsesAdvancedToolUse(body)
+	if isLegacyWire {
+		tools := gjson.GetBytes(body, "tools")
+		advancedToolUse = tools.IsArray() && len(tools.Array()) > 0
+	}
+	if advancedToolUse {
 		betas = append(betas, claudeAdvancedToolUseBeta)
 	}
 	if !claudeUsesLegacySystemReminder(body) && claudeIncludeMidConvClearAt(body, requested) {
@@ -237,7 +243,8 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	}
 	shouldIncludeFallbackCredit := requested[claudeFallbackCreditBeta] ||
 		gjson.GetBytes(body, "fallback_credit_token").Exists() ||
-		(oauthToken && gjson.GetBytes(body, "fallbacks").Exists())
+		(oauthToken && gjson.GetBytes(body, "fallbacks").Exists()) ||
+		(isLegacyWire && oauthToken && !isProbeOrHelper)
 	if shouldIncludeFallbackCredit {
 		betas = append(betas, claudeFallbackCreditBeta)
 	}
@@ -263,7 +270,7 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	if claudeRequestUsesFastMode(body, requested) {
 		betas = append(betas, claudeFastModeBeta)
 	}
-	if requested[claudeAFKModeBeta] {
+	if !isLegacyWire && requested[claudeAFKModeBeta] {
 		betas = append(betas, claudeAFKModeBeta)
 	}
 	if !isProbeOrHelper {
@@ -1142,9 +1149,10 @@ func applyClaudeHeadersWithNativeProfile(
 	countTokens := r.URL != nil && strings.HasSuffix(r.URL.Path, "/count_tokens")
 	requestedMap := claudeRequestedBetas(incomingBetas, extraBetas)
 	advisorNeeded := requestedMap[claudeAdvisorToolBeta] || claudeBodyHasAdvisorTool(body)
+	legacyWire := helps.ClaudeBaselineUsesLegacyWire(cfg)
 	baseBetas := incomingBetas
 	if !preserveCallerFingerprint {
-		baseBetas = claudeCodeCLIBetas(body, requestedMap, useOAuthBetas)
+		baseBetas = claudeCodeCLIBetas(body, requestedMap, useOAuthBetas, legacyWire)
 		if countTokens {
 			baseBetas = claudeCountTokensBetasForCredential(useOAuthBetas)
 			if advisorNeeded {
