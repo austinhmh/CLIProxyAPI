@@ -474,7 +474,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
@@ -543,6 +543,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, &param)
 		var streamUsage helps.StreamUsageBuffer
 		var seenTerminal bool
+		var seenDone bool
 		var streamFailed bool
 		var streamAborted bool
 		var upstreamEvent string
@@ -591,7 +592,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				return true
 			}
 			if useNativeResponses && isDone {
-				publishStreamError(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream ended before a terminal response event"}, false)
+				if !seenDone {
+					publishStreamError(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream ended before a terminal response event"}, false)
+				}
+				seenTerminal = true
 				return true
 			}
 			if !isDone && !json.Valid(dataPayload) {
@@ -611,6 +615,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+					if bytes.Contains(chunks[i], []byte("data: [DONE]")) {
+						seenDone = true
+					}
 				case <-ctx.Done():
 					streamAborted = true
 					return true
@@ -632,7 +639,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
-			streamUsage.ObserveOpenAIStream(line)
+			if useNativeResponses {
+				streamUsage.ObserveResponsesStream(line)
+			} else {
+				streamUsage.ObserveOpenAIStream(line)
+			}
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {

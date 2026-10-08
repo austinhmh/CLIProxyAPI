@@ -608,7 +608,6 @@ func (e *GeminiExecutor) executeInteractionsStream(ctx context.Context, auth *cl
 		var param any
 		helps.InitializeApplyPatchStream(ctx, sdktranslator.FormatInteractions, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), body, &param)
 		var frame []byte
-		var streamUsage helps.StreamUsageBuffer
 		emitFrame := func() bool {
 			rawFrame := bytes.Clone(frame)
 			trimmed := bytes.TrimSpace(rawFrame)
