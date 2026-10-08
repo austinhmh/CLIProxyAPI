@@ -81,11 +81,17 @@ const (
 )
 
 // These are the exact beta sequences observed on markerless native Haiku
-// helper requests. The first six are Claude Code 2.1.220. The last is the
-// 2.1.280 title helper captured 2026-09-23: structured output, then
-// server-side fallback, fallback credit, and cache diagnosis. Keeping the
-// allowlist exact avoids turning the helper exception into a generic
+// helper requests. The original profiles are Claude Code 2.1.220; the
+// advisor-tool profile without cache diagnosis was observed in 2.1.258.
+// The final profile is the 2.1.280 title helper captured 2026-09-23:
+// structured output, server-side fallback, fallback credit, and cache diagnosis.
+// Keeping the allowlist exact avoids turning the helper exception into a generic
 // no-claude-code-beta bypass.
+var claudeCodeHelperBetaProfilesSince258Structured = claudeCodeHelperBetaProfile(true,
+	"advisor-tool-2026-03-01",
+	"structured-outputs-2025-12-15",
+)
+
 var measuredClaudeCodeHelperBetaProfiles = map[string]claudeCodeHelperShape{
 	claudeCodeHelperBetaProfile(true):  claudeCodeHelperShapeMinimal,
 	claudeCodeHelperBetaProfile(false): claudeCodeHelperShapeMinimal,

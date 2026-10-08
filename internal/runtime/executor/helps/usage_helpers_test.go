@@ -54,9 +54,9 @@ func TestParseOpenAIUsageChatCompletions(t *testing.T) {
 }
 
 func TestUsageReporterRecordsTTFTStagesInRequestTiming(t *testing.T) {
-	timingTracker := internallogging.NewRequestTimingTracker("request-timing", "POST /v1/responses", time.Now())
+	timingTracker := logging.NewRequestTimingTracker("request-timing", "POST /v1/responses", time.Now())
 	timingTurn := timingTracker.BeginTurn("http_stream", "gpt-test")
-	ctx := internallogging.WithRequestTimingTurn(context.Background(), timingTurn)
+	ctx := logging.WithRequestTimingTurn(context.Background(), timingTurn)
 	reporter := NewUsageReporter(ctx, "codex", "gpt-test", nil)
 
 	reporter.StartResponseTTFT()
@@ -71,11 +71,11 @@ func TestUsageReporterRecordsTTFTStagesInRequestTiming(t *testing.T) {
 	for _, event := range snapshot.Turns[0].Events {
 		stages[event.Stage]++
 	}
-	if stages[internallogging.TimingStageUpstreamTTFTStarted] != 1 {
-		t.Fatalf("upstream TTFT start count = %d, want 1", stages[internallogging.TimingStageUpstreamTTFTStarted])
+	if stages[logging.TimingStageUpstreamTTFTStarted] != 1 {
+		t.Fatalf("upstream TTFT start count = %d, want 1", stages[logging.TimingStageUpstreamTTFTStarted])
 	}
-	if stages[internallogging.TimingStageFirstSemanticContent] != 1 {
-		t.Fatalf("first semantic content count = %d, want 1", stages[internallogging.TimingStageFirstSemanticContent])
+	if stages[logging.TimingStageFirstSemanticContent] != 1 {
+		t.Fatalf("first semantic content count = %d, want 1", stages[logging.TimingStageFirstSemanticContent])
 	}
 }
 

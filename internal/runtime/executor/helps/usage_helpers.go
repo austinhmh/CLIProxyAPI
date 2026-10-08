@@ -21,6 +21,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -982,8 +983,9 @@ func ParseCodexUsage(data []byte) (usage.Detail, bool) {
 	return detail, true
 }
 
-func ParseCodexUsage(data []byte) (usage.Detail, bool) {
-	return ParseResponsesUsage(data)
+// ParseResponsesUsage uses the shared Responses usage parser for local callers.
+func ParseResponsesUsage(data []byte) (usage.Detail, bool) {
+	return ParseCodexUsage(data)
 }
 
 func ParseCodexImageToolUsage(data []byte) (usage.Detail, bool) {
