@@ -46,7 +46,7 @@ func (e unauthorizedRefreshTestExecutor) Refresh(ctx context.Context, auth *Auth
 	return nil, errors.New("token refresh failed with status 401: invalid_grant")
 }
 
-func TestManager_RefreshAuthUnauthorizedFailureKeepsAuthInService(t *testing.T) {
+func TestManager_RefreshAuthUnauthorizedFailureKeepsAuthRegistered(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager(nil, &RoundRobinSelector{}, nil)
 	manager.RegisterExecutor(unauthorizedRefreshTestExecutor{
@@ -76,24 +76,24 @@ func TestManager_RefreshAuthUnauthorizedFailureKeepsAuthInService(t *testing.T) 
 	if got := updated.LastError.StatusCode(); got != http.StatusUnauthorized {
 		t.Fatalf("LastError.StatusCode() = %d, want %d", got, http.StatusUnauthorized)
 	}
-	if updated.LastError.Code == "unauthorized" {
-		t.Fatal("LastError.Code must not be \"unauthorized\", otherwise the auth would be treated as unusable")
+	if updated.LastError.Code != "unauthorized" {
+		t.Fatalf("LastError.Code = %q, want unauthorized", updated.LastError.Code)
 	}
-	if updated.Unavailable {
-		t.Fatal("expected refresh failure to keep the auth available for selection")
+	if !updated.Unavailable {
+		t.Fatal("expected invalid credentials to be unavailable for selection")
 	}
-	if updated.Status == StatusError {
-		t.Fatal("expected refresh failure to keep the auth status unchanged")
+	if updated.Status != StatusError {
+		t.Fatalf("status = %q, want error", updated.Status)
 	}
-	if !strings.HasPrefix(updated.StatusMessage, "refresh failed") {
-		t.Fatalf("StatusMessage = %q, want prefix \"refresh failed\"", updated.StatusMessage)
+	if !strings.HasPrefix(updated.StatusMessage, "unauthorized") {
+		t.Fatalf("StatusMessage = %q, want prefix \"unauthorized\"", updated.StatusMessage)
 	}
-	if updated.NextRefreshAfter.IsZero() {
-		t.Fatal("expected NextRefreshAfter to back off the next refresh attempt")
+	if !updated.NextRefreshAfter.IsZero() || !HasUnauthorizedAuthFailure(updated) {
+		t.Fatal("terminal unauthorized auth must not retry without new credentials")
 	}
 	now := time.Now()
-	if _, shouldSchedule := nextRefreshCheckAt(now, updated, time.Second); !shouldSchedule {
-		t.Fatal("expected auth to stay in the auto-refresh schedule")
+	if _, shouldSchedule := nextRefreshCheckAt(now, updated, time.Second); shouldSchedule {
+		t.Fatal("terminal unauthorized auth must leave the auto-refresh schedule")
 	}
 }
 

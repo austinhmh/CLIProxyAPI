@@ -92,7 +92,9 @@ func (object sessionObject) Get(path string) gjson.Result {
 //  9. session_id / sessionId
 //  10. prompt_cache_key (pck:), conversation.id (conv:), metadata.user_id (user:)
 //  11. conversation_id / chat_id
-//  12. execution_session_id metadata
+//  12. normalized Claude session metadata
+//  13. execution_session_id metadata
+//  14. LCP affinity metadata
 func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string]any) (SessionInfo, bool) {
 	var info SessionInfo
 	if metadata != nil {
@@ -858,7 +860,18 @@ func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string
 		}
 	}
 
-	// 7. ExecutionSessionMetadataKey
+	// Normalized Claude identity is supplied after request preprocessing, even
+	// when the original payload contained no Claude metadata.user_id.
+	if claudeSessionID, ok := metadata[cliproxyexecutor.ClaudeSessionIDMetadataKey].(string); ok {
+		if claudeSessionID = normalizedSessionCandidate(claudeSessionID); claudeSessionID != "" {
+			info.ClientType = "claude"
+			info.SessionID = "claude:" + claudeSessionID
+			info.AgentName = "main"
+			return finalizeSessionInfo(info)
+		}
+	}
+
+	// Explicit execution session metadata follows Claude identity.
 	if executionID, ok := metadata[cliproxyexecutor.ExecutionSessionMetadataKey].(string); ok {
 		if executionID = normalizedSessionCandidate(executionID); executionID != "" {
 			info.ClientType = "generic"
@@ -868,7 +881,7 @@ func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string
 		}
 	}
 
-	// 8. LCPAffinitySessionIDMetadataKey
+	// LCP affinity metadata is the final explicit fallback.
 	if lcpID, ok := metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey].(string); ok {
 		if lcpID = normalizedSessionCandidate(lcpID); lcpID != "" {
 			info.ClientType = "lcp"

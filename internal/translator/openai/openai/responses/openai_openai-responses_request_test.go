@@ -39,7 +39,10 @@ func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_ServiceTier(t *tes
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			raw := []byte(fmt.Sprintf(`{"model":"client-model","input":"hello","max_output_tokens":64,"service_tier":%s}`, testCase.serviceTier))
-			out := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("upstream-model", raw, true)
+			out, errConvert := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("upstream-model", raw, true)
+			if errConvert != nil {
+				t.Fatalf("convert Responses request: %v", errConvert)
+			}
 
 			serviceTier := gjson.GetBytes(out, "service_tier")
 			if serviceTier.Exists() != testCase.expected {

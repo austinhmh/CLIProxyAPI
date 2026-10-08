@@ -736,6 +736,7 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 				current.Status = StatusDisabled
 				current.NextRefreshAfter = time.Time{}
 				current.RefreshFailures = 0
+				current.LastError = refreshErrorFromError(err)
 				current.StatusMessage = "disabled (invalid grant)"
 				shouldUnschedule = true
 			} else if isDisabled {
@@ -765,6 +766,7 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 					current.NextRefreshAfter = time.Time{}
 					current.NextRetryAfter = time.Time{}
 					current.RefreshFailures = 0
+					current.LastError = refreshErrorFromError(err)
 					current.StatusMessage = "unauthorized"
 				} else if invalidGrant {
 					current.RefreshFailures++

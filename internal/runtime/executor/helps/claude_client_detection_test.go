@@ -373,9 +373,9 @@ func TestDetectClaudeCodeRequestRejectsNearMissHaikuHelpers(t *testing.T) {
 			payload: minimalPayload,
 		},
 		{
-			name: "unexpected request id",
+			name: "invalid request id",
 			mutate: func(headers http.Header) {
-				headers.Set("X-Client-Request-Id", "66666666-7777-4888-8999-aaaaaaaaaaaa")
+				headers.Set("X-Client-Request-Id", "not-a-uuid")
 			},
 			payload: minimalPayload,
 		},

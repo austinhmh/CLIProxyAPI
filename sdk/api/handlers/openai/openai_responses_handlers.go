@@ -22,6 +22,7 @@ import (
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	requestlogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -74,6 +75,7 @@ type responsesSSEFramer struct {
 	dataFrames           int
 	writeErr             error
 	canComplete          func() bool
+	timingTurn           *requestlogging.RequestTimingTurn
 }
 
 func (f *responsesSSEFramer) WriteChunk(w io.Writer, chunk []byte) {
@@ -132,8 +134,28 @@ func (f *responsesSSEFramer) Flush(w io.Writer) {
 }
 
 func (f *responsesSSEFramer) writeFrame(w io.Writer, frame []byte) {
-	if f.writeErr == nil {
-		f.writeErr = writeResponsesSSEChunk(w, f.repairFrame(frame))
+	if f.writeErr != nil {
+		return
+	}
+	wireFrame := f.repairFrame(frame)
+	if len(wireFrame) == 0 {
+		return
+	}
+	f.writeErr = writeResponsesSSEChunk(w, wireFrame)
+	if f.writeErr != nil || f.timingTurn == nil {
+		return
+	}
+	payload, hasPayload := responsesSSEDataPayload(wireFrame)
+	if !hasPayload || !gjson.ValidBytes(payload) {
+		return
+	}
+	eventType := gjson.GetBytes(payload, "type").String()
+	if eventType == "" {
+		eventType = responsesSSEEventName(wireFrame)
+	}
+	f.timingTurn.MarkOnce(requestlogging.TimingStageFirstDownstreamEvent, requestlogging.RequestTimingEventDetails{Outcome: eventType})
+	if eventType == "response.output_text.delta" && strings.TrimSpace(gjson.GetBytes(payload, "delta").String()) != "" {
+		f.timingTurn.MarkOnce(requestlogging.TimingStageFirstVisibleText, requestlogging.RequestTimingEventDetails{Outcome: eventType})
 	}
 }
 
@@ -740,7 +762,7 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 	if isCodexClient {
 		failureEvent = "response.failed"
 	}
-	framer := &responsesSSEFramer{failureEvent: failureEvent, isCodexClient: isCodexClient, canComplete: func() bool { return usage.StreamDeliverySupported(cliCtx) }}
+	framer := &responsesSSEFramer{failureEvent: failureEvent, isCodexClient: isCodexClient, canComplete: func() bool { return usage.StreamDeliverySupported(cliCtx) }, timingTurn: requestlogging.RequestTimingTurnFromContext(cliCtx)}
 	var initialOutput bytes.Buffer
 
 	// Peek at the first complete SSE data frame.

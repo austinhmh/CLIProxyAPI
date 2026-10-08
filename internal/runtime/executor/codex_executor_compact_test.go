@@ -213,12 +213,9 @@ func TestCodexExecutorCompactPreservesPriorityServiceTier(t *testing.T) {
 	}
 }
 
-// TestCodexExecutorCompactIdentityConfuseDoesNotResurrectClientMetadata guards
-// against a regression where Codex Identity Confuse rewrites
-// client_metadata.x-codex-installation-id from the original user payload after
-// client_metadata was already stripped for the compact upstream, resurrecting the
-// unsupported field on the bytes actually sent over the wire.
-func TestCodexExecutorCompactIdentityConfuseDoesNotResurrectClientMetadata(t *testing.T) {
+// Compact requests must not restore client_metadata from the original payload
+// after the unsupported field was stripped from the bytes sent upstream.
+func TestCodexExecutorCompactDoesNotResurrectClientMetadata(t *testing.T) {
 	payload := `{
 		"model":"gpt-5.6-sol",
 		"input":[{"type":"message","role":"user","content":"history"},{"type":"compaction_trigger"}],
@@ -236,7 +233,6 @@ func TestCodexExecutorCompactIdentityConfuseDoesNotResurrectClientMetadata(t *te
 
 	executor := NewCodexExecutor(&config.Config{
 		Routing: config.RoutingConfig{Strategy: "fill-first"},
-		Codex:   config.CodexConfig{IdentityConfuse: true},
 	})
 	auth := &cliproxyauth.Auth{ID: "auth-1", Provider: "codex", Attributes: map[string]string{
 		"base_url": server.URL,
@@ -255,6 +251,6 @@ func TestCodexExecutorCompactIdentityConfuseDoesNotResurrectClientMetadata(t *te
 		t.Fatalf("Execute error: %v", err)
 	}
 	if gjson.GetBytes(gotBody, "client_metadata").Exists() {
-		t.Fatalf("Identity Confuse resurrected unsupported client_metadata on the wire: %s", gotBody)
+		t.Fatalf("compact request resurrected unsupported client_metadata on the wire: %s", gotBody)
 	}
 }
