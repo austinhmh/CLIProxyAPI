@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -265,15 +266,17 @@ func TestIssue6332MiddlewareFlushError(t *testing.T) {
 					t.Fatal(errReadDir)
 				}
 				found := false
+				var logSummaries []string
 				for _, file := range files {
 					data, errReadFile := os.ReadFile(filepath.Join(logsDir, file.Name()))
 					if errReadFile != nil {
 						t.Fatal(errReadFile)
 					}
+					logSummaries = append(logSummaries, fmt.Sprintf("%s size=%d response_section=%t", file.Name(), len(data), bytes.Contains(data, []byte("=== RESPONSE"))))
 					found = found || strings.Contains(string(data), "logged-response")
 				}
 				if !found {
-					t.Error("middleware did not capture response body")
+					t.Errorf("middleware did not capture response body: %v", logSummaries)
 				}
 			}
 		})

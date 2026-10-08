@@ -192,7 +192,7 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 		provider, protocol string
 		snapshot           bool
 	}{
-		{"custom-compat", "chat", false}, {"claude", "claude", false}, {"claude-oauth", "claude", false},
+		{"custom-compat", "responses", false}, {"claude", "claude", false}, {"claude-oauth", "claude", false},
 		{"gemini-interactions", "interactions", false}, {"devin", "devin", false},
 		{"xai", "responses", false}, {"meta", "responses", false}, {"kimi", "responses", false},
 		{"gemini", "gemini", true}, {"vertex", "gemini", true}, {"antigravity", "antigravity", true},
@@ -229,7 +229,7 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 			defer upstream.Close()
 			defer unblock()
 			exec := task6Executor(tc.provider)
-			if tc.protocol == "responses" {
+			if tc.protocol == "responses" && tc.provider != "custom-compat" {
 				exec = task6RepairExecutor(tc.provider)
 			} else if tc.provider == "devin" {
 				exec = NewDevinExecutor(&config.Config{})
