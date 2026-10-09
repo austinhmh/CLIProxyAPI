@@ -203,6 +203,10 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.provider == "custom-compat" && r.URL.Path != "/chat/completions" {
+					t.Errorf("custom compat upstream path = %q, want /chat/completions", r.URL.Path)
+					return
+				}
 				body, errReadAll := io.ReadAll(r.Body)
 				if errReadAll != nil {
 					t.Error(errReadAll)
@@ -235,6 +239,9 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 				exec = NewDevinExecutor(&config.Config{})
 			}
 			auth := &cliproxyauth.Auth{ID: t.Name(), Provider: exec.Identifier(), Attributes: map[string]string{"api_key": "test", "base_url": upstream.URL}}
+			if tc.provider == "custom-compat" {
+				auth.Attributes["use_chat_completions"] = "true"
+			}
 			if tc.provider == "claude-oauth" {
 				auth.Attributes["api_key"] = "sk-ant-oat-test"
 				auth.Metadata = map[string]any{"account_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}

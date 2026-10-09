@@ -14,7 +14,7 @@ services:
     #   - .env
     environment:
       DEPLOY: ${DEPLOY:-}
-      SSL_CERT_DIR: /reclaude-ca
+      SSL_CERT_DIR: /etc/ssl/certs:/reclaude-ca
     ports:
       - "8317:8317"
       - "8085:8085"

@@ -98,7 +98,7 @@ jobs:
             test_output="$(tail -n 80 "${test_log}")"
           fi
 
-          test_output="$(printf '%s' "${test_output}" | head -c 3500)"
+          test_output="${test_output:0:3500}"
           test_output="${test_output//'%'/'%25'}"
           test_output="${test_output//$'\r'/'%0D'}"
           test_output="${test_output//$'\n'/'%0A'}"
