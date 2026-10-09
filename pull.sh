@@ -10,8 +10,10 @@ ROLLBACK_IMAGE="cli-proxy-api-plus:rollback-previous"
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE_COMMAND=(docker compose)
+  COMPOSE_PULL_FLAGS=(--pull never)
 elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE_COMMAND=(docker-compose)
+  COMPOSE_PULL_FLAGS=()
 else
   echo "Error: neither docker compose nor docker-compose is available."
   exit 1
@@ -87,7 +89,8 @@ replace_running_container() {
     docker rm "${CONTAINER_NAME}" >/dev/null
   fi
   export CLI_PROXY_IMAGE="${target_image}"
-  "${COMPOSE_COMMAND[@]}" -f "${COMPOSE_FILE}" up -d --no-build --force-recreate "${SERVICE_NAME}"
+  # The candidate was pulled and the rollback image was tagged locally.
+  "${COMPOSE_COMMAND[@]}" -f "${COMPOSE_FILE}" up -d --no-build "${COMPOSE_PULL_FLAGS[@]}" --force-recreate "${SERVICE_NAME}"
 }
 
 rollback() {
