@@ -655,6 +655,17 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 						if bytes.Contains(chunk, []byte("data: [DONE]")) {
 							seenDone = true
 						}
+						if !useNativeResponses && responseFormat == sdktranslator.FormatOpenAIResponse {
+							for _, chunkLine := range bytes.Split(chunk, []byte("\n")) {
+								if !bytes.HasPrefix(chunkLine, []byte("data:")) {
+									continue
+								}
+								eventType := gjson.GetBytes(bytes.TrimSpace(chunkLine[len("data:"):]), "type").String()
+								if eventType == "response.completed" || eventType == "response.incomplete" || eventType == "response.done" {
+									seenDone = true
+								}
+							}
+						}
 					case <-ctx.Done():
 						streamAborted = true
 						return true
