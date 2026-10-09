@@ -5,6 +5,8 @@ cli-proxy-api
 # Configuration
 config.yaml
 .env
+/config.yaml.bak-reclaude
+/docker-compose.yml.bak
 
 # Generated content
 bin/*
@@ -13,6 +15,7 @@ conv/*
 temp/*
 refs/*
 plugins/*
+/data/
 examples/plugin/bin/*
 
 # Storage backends

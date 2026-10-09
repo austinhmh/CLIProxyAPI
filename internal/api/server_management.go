@@ -24,6 +24,7 @@ func (s *Server) registerManagementRoutes() {
 	s.registerManagementV8Routes()
 	s.engine.POST("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.PostOAuthCallback)
 	s.engine.GET("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.GetOAuthCallback)
+	s.engine.GET("/v0/management/routing-insights/monitor", s.managementAvailabilityMiddleware(), s.mgmt.GetSessionMonitorPage)
 
 	mgmt := s.engine.Group("/v0/management")
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
@@ -90,6 +91,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
+		mgmt.GET("/routing-insights", s.mgmt.GetRoutingInsights)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)

@@ -106,9 +106,13 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
 	endpoint := "/chat/completions"
+	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact" && !e.useChatCompletions(auth, req)
 	if opts.Alt == "responses/compact" {
 		to = sdktranslator.FromString("openai-response")
 		endpoint = "/responses/compact"
+	} else if useNativeResponses {
+		to = sdktranslator.FormatOpenAIResponse
+		endpoint = "/responses"
 	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -337,6 +341,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
+	endpoint := "/chat/completions"
+	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact" && !e.useChatCompletions(auth, req)
+	if useNativeResponses {
+		to = sdktranslator.FormatOpenAIResponse
+		endpoint = "/responses"
+	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
@@ -369,10 +379,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 	// Request usage data in the final streaming chunk so that token statistics
 	// are captured even when the upstream is an OpenAI-compatible provider.
-	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	if !useNativeResponses {
+		translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	translated = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
@@ -500,14 +512,38 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
-			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, streamLine, &param, claudeInputTokens)
-			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
-			for i := range chunks {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
-				case <-ctx.Done():
-					streamAborted = true
-					return true
+			responseLines := [][]byte{streamLine}
+			if useNativeResponses {
+				responseLines = nil
+				if eventName != "" {
+					responseLines = append(responseLines, []byte("event: "+eventName+"\n"))
+				}
+				responseLines = append(responseLines, append(streamLine, '\n', '\n'))
+			}
+			for _, responseLine := range responseLines {
+				chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, responseLine, &param, claudeInputTokens)
+				helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+				for _, chunk := range chunks {
+					select {
+					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+						if bytes.Contains(chunk, []byte("data: [DONE]")) {
+							seenDone = true
+						}
+						if !useNativeResponses && responseFormat == sdktranslator.FormatOpenAIResponse {
+							for _, chunkLine := range bytes.Split(chunk, []byte("\n")) {
+								if !bytes.HasPrefix(chunkLine, []byte("data:")) {
+									continue
+								}
+								eventType := gjson.GetBytes(bytes.TrimSpace(chunkLine[len("data:"):]), "type").String()
+								if eventType == "response.completed" || eventType == "response.incomplete" || eventType == "response.done" {
+									seenDone = true
+								}
+							}
+						}
+					case <-ctx.Done():
+						streamAborted = true
+						return true
+					}
 				}
 			}
 			if helps.ApplyPatchTranslationError(param) != nil {
@@ -517,6 +553,13 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			if isDone {
 				seenDone = true
 				return true
+			}
+			if useNativeResponses && responseFormat == sdktranslator.FormatOpenAIResponse {
+				eventType := gjson.GetBytes(dataPayload, "type").String()
+				if eventType == "response.completed" || eventType == "response.incomplete" || eventType == "response.done" {
+					seenDone = true
+					return true
+				}
 			}
 			return false
 		}
@@ -557,7 +600,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		if !streamFailed && !streamAborted && helps.EndApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
 			return
 		}
-		if !streamFailed && !streamAborted && !seenDone && errScan == nil && responseFormat == sdktranslator.FormatOpenAIResponse && ctx.Err() == nil && helps.CanFinalizeResponseStream(param) {
+		if !useNativeResponses && !streamFailed && !streamAborted && !seenDone && errScan == nil && responseFormat == sdktranslator.FormatOpenAIResponse && ctx.Err() == nil && helps.CanFinalizeResponseStream(param) {
 			finalChunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, []byte("data: [DONE]"), &param, claudeInputTokens)
 			for _, finalChunk := range finalChunks {
 				select {
@@ -587,7 +630,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			// Without a translator-confirmed terminal state, a clean Responses EOF
 			// without [DONE] remains a failed stream instead of completing it.
 			if responseFormat == sdktranslator.FormatOpenAIResponse {
-				streamErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before [DONE]"}
+				missingTerminal := "upstream stream closed before [DONE]"
+				if useNativeResponses {
+					missingTerminal = "upstream stream closed before a terminal response event"
+				}
+				streamErr := statusErr{code: http.StatusBadGateway, msg: missingTerminal}
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 				reporter.PublishFailure(ctx, streamErr)
 				select {
@@ -986,6 +1033,18 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 	return
 }
 
+func (e *OpenAICompatExecutor) useChatCompletions(auth *cliproxyauth.Auth, req cliproxyexecutor.Request) bool {
+	if auth != nil {
+		if raw, exists := auth.Attributes["use_chat_completions"]; exists {
+			if enabled, errParse := strconv.ParseBool(raw); errParse == nil {
+				return enabled
+			}
+		}
+	}
+	compat := e.resolveCompatConfig(auth, req)
+	return compat != nil && compat.UseChatCompletions
+}
+
 func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req cliproxyexecutor.Request) *config.OpenAICompatibility {
 	if auth == nil || e.cfg == nil {
 		return nil
@@ -995,6 +1054,7 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req 
 		// non-secret options belong to the credential selected for this attempt.
 		var options struct {
 			SupportPromptCacheKey bool                              `json:"support-prompt-cache-key"`
+			UseChatCompletions    bool                              `json:"use-chat-completions"`
 			Models                []config.OpenAICompatibilityModel `json:"models"`
 		}
 		present := false
@@ -1017,6 +1077,7 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req 
 			return &config.OpenAICompatibility{
 				Name:                  auth.Attributes["compat_name"],
 				SupportPromptCacheKey: options.SupportPromptCacheKey,
+				UseChatCompletions:    options.UseChatCompletions,
 				Models:                options.Models,
 			}
 		}

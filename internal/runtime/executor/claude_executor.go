@@ -28,7 +28,8 @@ type ClaudeExecutor struct {
 	oauthProfileFetcher     claudeOAuthProfileFetcher
 	// oauthToolAliases is shared by every ForAPIKey copy of this executor;
 	// constructors allocate it so copies made per request reuse one store.
-	oauthToolAliases *claudeOAuthToolAliasStore
+	oauthToolAliases   *claudeOAuthToolAliasStore
+	promptCacheRuntime *ClaudePromptCacheRuntime
 }
 
 type claudeOAuthCancellationError struct {
@@ -141,7 +142,11 @@ func logClaudeSignatureSanitizeReport(ctx context.Context, baseModel string, rep
 const defaultModelMaxTokens = 1024
 
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
-	return &ClaudeExecutor{cfg: cfg, oauthToolAliases: &claudeOAuthToolAliasStore{}}
+	return &ClaudeExecutor{
+		cfg:                cfg,
+		oauthToolAliases:   &claudeOAuthToolAliasStore{},
+		promptCacheRuntime: NewClaudePromptCacheRuntime(),
+	}
 }
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }

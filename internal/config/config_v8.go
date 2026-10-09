@@ -93,6 +93,7 @@ func buildV8Paths() []configPath {
 		{"codex.response-steering", "upstream.codex.response-steering"},
 		{"codex", "oauth.providers.codex"}, {"codex-header-defaults", "oauth.providers.codex.header-defaults"},
 		{"claude", "upstream.claude"}, {"claude-code", "upstream.claude"},
+		{"claude-prompt-cache", "upstream.claude.prompt-cache"},
 		{"disable-claude-cloak-mode", "upstream.claude.disable-claude-cloak-mode"},
 		{"claude-header-defaults", "upstream.claude.header-defaults"},
 		{"antigravity", "oauth.providers.antigravity"},

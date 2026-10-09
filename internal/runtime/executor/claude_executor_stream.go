@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -148,6 +149,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	}
 
 	body = ensureModelMaxTokens(body, baseModel)
+	body = raiseMaxTokensForConversationCompaction(body, baseModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -160,7 +162,8 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// first-user marker cannot suppress system/latest-user breakpoints.
 	// cloaked and confirmedClaudeCode are mutually exclusive: resolveClaudeWirePolicy
 	// forces Cloak off for a confirmed native client.
-	cpaOwnsCacheControl := shouldEnsureCacheControl(body, cloaked, confirmedClaudeCode, originalPayload, req.Payload)
+	cacheMode := e.claudePromptCacheMode()
+	cpaOwnsCacheControl := cacheMode == config.ClaudePromptCacheModeLegacy && shouldEnsureCacheControl(body, cloaked, confirmedClaudeCode, originalPayload, req.Payload)
 	if cpaOwnsCacheControl {
 		body = ensureCacheControl(body)
 	}
@@ -216,6 +219,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			return nil, err
 		}
 	}
+	var promptCachePlan *helps.ClaudePromptCachePlan
+	if cacheMode == config.ClaudePromptCacheModeAdaptive {
+		bodyForUpstream, promptCachePlan = e.planAdaptiveClaudePromptCache(ctx, auth, apiKey, baseURL, baseModel, bodyForUpstream)
+	}
 	if cloaked && len(wireSettings.sensitiveWords) > 0 {
 		matcher := helps.BuildSensitiveWordMatcher(wireSettings.sensitiveWords)
 		bodyForUpstream = helps.ObfuscateSensitiveWords(bodyForUpstream, matcher)
@@ -253,6 +260,19 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if errMidSystem := validateClaudeMidSystemMessageModel(bodyForUpstream, confirmedClaudeCode, isAnthropicUpstreamBase(baseURL)); errMidSystem != nil {
 		return nil, errMidSystem
 	}
+	if promptCachePlan != nil {
+		promptCachePlan = e.promptCacheRuntime.RebuildClaudePromptCachePlan(bodyForUpstream, promptCachePlan)
+	}
+	promptCacheAttempt, err := e.acquireClaudePromptCacheAttempt(ctx, promptCachePlan)
+	if err != nil {
+		return nil, err
+	}
+	promptCacheOwnershipTransferred := false
+	defer func() {
+		if promptCacheAttempt != nil && !promptCacheOwnershipTransferred {
+			promptCacheAttempt.Fail()
+		}
+	}()
 	reporter.SetTranslatedReasoningEffort(bodyForUpstream, to.String())
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyForUpstream))
 	if err != nil {
@@ -295,6 +315,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		return nil, wrapClaudeFastRequestError(fastRequest, 0, err)
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if promptCacheAttempt != nil && httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+		promptCacheAttempt.MarkResponseStarted()
+	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		// Decompress error responses — pass the Content-Encoding value (may be empty)
 		// and let decodeResponseBody handle both header-declared and magic-byte-detected
@@ -335,9 +358,29 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		return nil, wrapClaudeFastRequestError(fastRequest, httpResp.StatusCode, err)
 	}
+	responseBodyReader := io.Reader(decodedBody)
+	if promptCacheAttempt != nil {
+		responseBodyReader = &claudePromptCacheProgressReadCloser{ReadCloser: decodedBody, attempt: promptCacheAttempt}
+	}
 	out := make(chan cliproxyexecutor.StreamChunk, 1)
+	promptCacheOwnershipTransferred = true
 	go func() {
+		promptCacheSucceeded := false
 		defer close(out)
+		defer func() {
+			if promptCacheAttempt == nil {
+				return
+			}
+			if promptCacheSucceeded {
+				promptCacheAttempt.Complete()
+			} else {
+				promptCacheAttempt.Fail()
+			}
+		}()
+		if promptCacheAttempt != nil {
+			stopPromptCacheHeartbeat := promptCacheAttempt.StartResponseHeartbeat()
+			defer stopPromptCacheHeartbeat()
+		}
 		defer func() {
 			if errClose := decodedBody.Close(); errClose != nil {
 				log.Errorf("response body close error: %v", errClose)
@@ -370,7 +413,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 		// If the response target is Claude, directly forward complete SSE events without translation.
 		if responseFormat == to {
-			scanner := bufio.NewScanner(decodedBody)
+			scanner := bufio.NewScanner(responseBodyReader)
 			scanner.Buffer(nil, 52_428_800) // 50MB
 			var event bytes.Buffer
 			var upstreamMessageID string
@@ -434,12 +477,13 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if upstreamCompleted {
 				commitClaudeContinuity(diagnosticsState, upstreamMessageID, helps.HeaderValueCaseInsensitive(httpResp.Header, "request-id"))
 				e.rememberClaudeOAuthToolAliases(body, oauthToolNamesReverseMap, upstreamMessageID)
+				promptCacheSucceeded = true
 			}
 			return
 		}
 
 		// For other formats, use translation
-		scanner := bufio.NewScanner(decodedBody)
+		scanner := bufio.NewScanner(responseBodyReader)
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		var param any
 		helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), bodyForTranslation, &param)
@@ -509,6 +553,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if upstreamCompleted {
 			commitClaudeContinuity(diagnosticsState, upstreamMessageID, helps.HeaderValueCaseInsensitive(httpResp.Header, "request-id"))
 			e.rememberClaudeOAuthToolAliases(body, oauthToolNamesReverseMap, upstreamMessageID)
+			promptCacheSucceeded = true
 		}
 	}()
 	result := &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}

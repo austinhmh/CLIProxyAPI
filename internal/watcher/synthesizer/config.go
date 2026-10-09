@@ -339,6 +339,9 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				attrs["models_hash"] = hash
 			}
 			addConfigHeadersToAttrs(compat.Headers, attrs)
+			if compat.UseChatCompletions {
+				attrs["use_chat_completions"] = "true"
+			}
 			a := &coreauth.Auth{
 				ID:         id,
 				Provider:   internalProviderKey,
@@ -381,6 +384,9 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				attrs["models_hash"] = hash
 			}
 			addConfigHeadersToAttrs(compat.Headers, attrs)
+			if compat.UseChatCompletions {
+				attrs["use_chat_completions"] = "true"
+			}
 			a := &coreauth.Auth{
 				ID:         id,
 				Provider:   internalProviderKey,

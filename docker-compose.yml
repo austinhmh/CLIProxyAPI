@@ -14,6 +14,7 @@ services:
     #   - .env
     environment:
       DEPLOY: ${DEPLOY:-}
+      SSL_CERT_DIR: /reclaude-ca
     ports:
       - "8317:8317"
       - "8085:8085"
@@ -26,4 +27,6 @@ services:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
       - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
+      - ${CLI_PROXY_DATA_PATH:-./data}:/CLIProxyAPI/data
+      - /root/.reclaude:/reclaude-ca:ro
     restart: unless-stopped

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -145,6 +146,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 
 	body = ensureModelMaxTokens(body, baseModel)
+	body = raiseMaxTokensForConversationCompaction(body, baseModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -157,7 +159,8 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// first-user marker cannot suppress system/latest-user breakpoints.
 	// cloaked and confirmedClaudeCode are mutually exclusive: resolveClaudeWirePolicy
 	// forces Cloak off for a confirmed native client.
-	cpaOwnsCacheControl := shouldEnsureCacheControl(body, cloaked, confirmedClaudeCode, originalPayload, req.Payload)
+	cacheMode := e.claudePromptCacheMode()
+	cpaOwnsCacheControl := cacheMode == config.ClaudePromptCacheModeLegacy && shouldEnsureCacheControl(body, cloaked, confirmedClaudeCode, originalPayload, req.Payload)
 	if cpaOwnsCacheControl {
 		body = ensureCacheControl(body)
 	}
@@ -221,6 +224,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 			return resp, err
 		}
 	}
+	var promptCachePlan *helps.ClaudePromptCachePlan
+	if cacheMode == config.ClaudePromptCacheModeAdaptive {
+		bodyForUpstream, promptCachePlan = e.planAdaptiveClaudePromptCache(ctx, auth, apiKey, baseURL, baseModel, bodyForUpstream)
+	}
 	if cloaked && len(wireSettings.sensitiveWords) > 0 {
 		matcher := helps.BuildSensitiveWordMatcher(wireSettings.sensitiveWords)
 		bodyForUpstream = helps.ObfuscateSensitiveWords(bodyForUpstream, matcher)
@@ -260,6 +267,23 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Read-only validation must observe the final configured model and messages.
 	if errMidSystem := validateClaudeMidSystemMessageModel(bodyForUpstream, confirmedClaudeCode, isAnthropicUpstreamBase(baseURL)); errMidSystem != nil {
 		return resp, errMidSystem
+	}
+	if promptCachePlan != nil {
+		promptCachePlan = e.promptCacheRuntime.RebuildClaudePromptCachePlan(bodyForUpstream, promptCachePlan)
+	}
+	promptCacheAttempt, err := e.acquireClaudePromptCacheAttempt(ctx, promptCachePlan)
+	if err != nil {
+		return resp, err
+	}
+	promptCacheSucceeded := false
+	if promptCacheAttempt != nil {
+		defer func() {
+			if promptCacheSucceeded {
+				promptCacheAttempt.Complete()
+			} else {
+				promptCacheAttempt.Fail()
+			}
+		}()
 	}
 	reporter.SetTranslatedReasoningEffort(bodyForUpstream, to.String())
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyForUpstream))
@@ -303,6 +327,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		return resp, wrapClaudeFastRequestError(fastRequest, 0, err)
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if promptCacheAttempt != nil && httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+		promptCacheAttempt.MarkResponseStarted()
+	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		// Decompress error responses — pass the Content-Encoding value (may be empty)
 		// and let decodeResponseBody handle both header-declared and magic-byte-detected
@@ -348,7 +375,13 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 			log.Errorf("response body close error: %v", errClose)
 		}
 	}()
-	data, err := io.ReadAll(decodedBody)
+	responseBodyReader := io.Reader(decodedBody)
+	if promptCacheAttempt != nil {
+		stopHeartbeat := promptCacheAttempt.StartResponseHeartbeat()
+		defer stopHeartbeat()
+		responseBodyReader = &claudePromptCacheProgressReadCloser{ReadCloser: decodedBody, attempt: promptCacheAttempt}
+	}
+	data, err := io.ReadAll(responseBodyReader)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, wrapClaudeFastRequestError(fastRequest, httpResp.StatusCode, err)
@@ -416,5 +449,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		out = helps.EnsureResponsesUsageDetails(out)
 	}
 	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	promptCacheSucceeded = true
 	return resp, nil
 }

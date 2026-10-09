@@ -134,6 +134,46 @@ type ClaudeHeaderDefaults struct {
 	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
 }
 
+const (
+	ClaudePromptCacheModeLegacy      = "legacy"
+	ClaudePromptCacheModeAdaptive    = "adaptive"
+	ClaudePromptCacheModePassthrough = "passthrough"
+
+	defaultClaudePromptCacheColdStartMaxWaitSeconds = 15
+	maxClaudePromptCacheColdStartMaxWaitSeconds     = 60
+)
+
+// ClaudePromptCacheConfig enables opt-in cache planning without cache diagnostics.
+type ClaudePromptCacheConfig struct {
+	Mode                    string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	ColdStartMaxWaitSeconds *int   `yaml:"cold-start-max-wait-seconds,omitempty" json:"cold-start-max-wait-seconds,omitempty"`
+}
+
+func (config ClaudePromptCacheConfig) EffectiveMode() string {
+	switch strings.ToLower(strings.TrimSpace(config.Mode)) {
+	case ClaudePromptCacheModeAdaptive:
+		return ClaudePromptCacheModeAdaptive
+	case ClaudePromptCacheModePassthrough:
+		return ClaudePromptCacheModePassthrough
+	default:
+		return ClaudePromptCacheModeLegacy
+	}
+}
+
+func (config ClaudePromptCacheConfig) EffectiveColdStartMaxWaitSeconds() int {
+	if config.ColdStartMaxWaitSeconds == nil {
+		return defaultClaudePromptCacheColdStartMaxWaitSeconds
+	}
+	configuredSeconds := *config.ColdStartMaxWaitSeconds
+	if configuredSeconds < 0 {
+		return defaultClaudePromptCacheColdStartMaxWaitSeconds
+	}
+	if configuredSeconds > maxClaudePromptCacheColdStartMaxWaitSeconds {
+		return maxClaudePromptCacheColdStartMaxWaitSeconds
+	}
+	return configuredSeconds
+}
+
 // CodexHeaderDefaults configures fallback header values injected into Codex
 // model requests for OAuth/file-backed auth when the client omits them.
 // UserAgent applies to HTTP and websocket requests; BetaFeatures only applies to websockets.
@@ -861,6 +901,9 @@ type OpenAICompatibility struct {
 
 	// SupportPromptCacheKey enables derived prompt_cache_key injection for supported requests.
 	SupportPromptCacheKey bool `yaml:"support-prompt-cache-key,omitempty" json:"support-prompt-cache-key,omitempty"`
+
+	// UseChatCompletions opts Responses requests into legacy Chat Completions upstreams.
+	UseChatCompletions bool `yaml:"use-chat-completions,omitempty" json:"use-chat-completions,omitempty"`
 
 	// DisableCooling overrides the global cooling policy for this provider when set.
 	// True disables auth/model cooldowns; false explicitly enables them.

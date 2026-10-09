@@ -2439,3 +2439,30 @@ func ensureModelMaxTokens(body []byte, modelID string) []byte {
 
 	return body
 }
+
+const claudeConversationTranscriptMarker = "<conversation_transcript>"
+
+// raiseMaxTokensForConversationCompaction prevents explicit low limits from truncating summaries.
+func raiseMaxTokensForConversationCompaction(body []byte, modelID string) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+	requestedMaxTokens := gjson.GetBytes(body, "max_tokens").Int()
+	if requestedMaxTokens <= 0 || !bytes.Contains(body, []byte(claudeConversationTranscriptMarker)) {
+		return body
+	}
+	for _, provider := range registry.GetGlobalRegistry().GetModelProviders(strings.TrimSpace(modelID)) {
+		if !strings.EqualFold(provider, "claude") {
+			continue
+		}
+		modelInfo := registry.GetGlobalRegistry().GetModelInfo(strings.TrimSpace(modelID), "claude")
+		if modelInfo == nil || modelInfo.MaxCompletionTokens <= 0 || int64(modelInfo.MaxCompletionTokens) <= requestedMaxTokens {
+			return body
+		}
+		if updatedBody, errSet := sjson.SetBytes(body, "max_tokens", modelInfo.MaxCompletionTokens); errSet == nil {
+			return updatedBody
+		}
+		return body
+	}
+	return body
+}

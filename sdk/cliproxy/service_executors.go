@@ -298,7 +298,10 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	case "antigravity":
 		s.coreManager.RegisterExecutor(executor.NewAntigravityExecutor(cfg))
 	case "claude":
-		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(cfg))
+		s.claudePromptCacheOnce.Do(func() {
+			s.claudePromptCacheRuntime = executor.NewClaudePromptCacheRuntime()
+		})
+		s.coreManager.RegisterExecutor(executor.NewClaudeExecutorWithPromptCacheRuntime(cfg, s.claudePromptCacheRuntime))
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		s.coreManager.RegisterExecutor(executor.NewKimiExecutor(cfg))
 	case "xai":
