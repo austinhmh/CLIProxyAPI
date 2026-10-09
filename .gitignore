@@ -6,6 +6,7 @@ cli-proxy-api
 config.yaml
 .env
 /config.yaml.bak-reclaude
+/config.yaml.bak-metadata-filter
 /docker-compose.yml.bak
 
 # Generated content

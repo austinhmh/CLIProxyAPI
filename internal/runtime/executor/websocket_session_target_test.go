@@ -231,6 +231,7 @@ func TestWebsocketRetryBindFailureClearsActiveSessionState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 			var connections atomic.Int32
+			releaseCompletion := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, errUpgrade := upgrader.Upgrade(w, r, nil)
 				if errUpgrade != nil {
@@ -252,9 +253,13 @@ func TestWebsocketRetryBindFailureClearsActiveSessionState(t *testing.T) {
 				completed := []byte(`{"type":"response.completed","response":{"id":"response-1","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`)
 				if errWrite := conn.WriteMessage(websocket.TextMessage, completed); errWrite != nil {
 					t.Errorf("write websocket completion: %v", errWrite)
+					return
 				}
+				// A persistent upstream remains connected after the terminal event.
+				<-releaseCompletion
 			}))
 			defer server.Close()
+			defer close(releaseCompletion)
 
 			lifecycle := &rejectSecondBindLifecycle{}
 			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, ResponseFormat: sdktranslator.FormatOpenAIResponse, ExecutionLifecycle: lifecycle, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: "retry-bind"}}
