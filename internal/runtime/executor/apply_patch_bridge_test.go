@@ -410,7 +410,7 @@ func newApplyPatchCompatTestExecutor(t *testing.T, reply string) (*OpenAICompatE
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(server.Close)
-	return NewOpenAICompatExecutor("custom-compat", &config.Config{}), &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": server.URL + "/v1", "api_key": "test"}}, bodies
+	return NewOpenAICompatExecutor("custom-compat", &config.Config{}), &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": server.URL + "/v1", "api_key": "test", "use_chat_completions": "true"}}, bodies
 }
 
 func applyPatchTestChatReply(arguments string) string {

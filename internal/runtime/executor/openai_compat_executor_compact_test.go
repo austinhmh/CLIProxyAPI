@@ -913,8 +913,9 @@ func TestOpenAICompatExecutorResponsesStreamFailsOnEOFWithoutDone(t *testing.T) 
 
 	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
 	auth := &cliproxyauth.Auth{Attributes: map[string]string{
-		"base_url": server.URL + "/v1",
-		"api_key":  "test",
+		"base_url":             server.URL + "/v1",
+		"api_key":              "test",
+		"use_chat_completions": "true",
 	}}
 	request := []byte(`{"model":"deepseek-v4-flash","input":"hi","stream":true}`)
 	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{

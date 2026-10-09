@@ -88,6 +88,9 @@ func task6ProviderFixture(provider, mode, toolName string) string {
 
 func task6Executor(provider string) cliproxyauth.ProviderExecutor {
 	cfg := &config.Config{}
+	if provider == "custom-compat" {
+		cfg.OpenAICompatibility = []config.OpenAICompatibility{{Name: provider, UseChatCompletions: true}}
+	}
 	switch provider {
 	case "claude", "claude-oauth":
 		return NewClaudeExecutor(cfg)
@@ -568,7 +571,7 @@ func TestApplyPatchFailureStopsConsumptionAndNextAttemptIsFresh(t *testing.T) {
 	}))
 	defer server.Close()
 	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
-	auth := &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+	auth := &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL, "use_chat_completions": "true"}}
 	req := cliproxyexecutor.Request{Model: "patch-model", Payload: []byte(task6PatchRequest)}
 	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: req.Payload}
 	stream, errExecuteStream := exec.ExecuteStream(t.Context(), auth, req, opts)
@@ -666,7 +669,7 @@ func TestApplyPatchNonStreamNativeNilWithoutErrorIs502(t *testing.T) {
 	}))
 	defer server.Close()
 	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
-	auth := &cliproxyauth.Auth{ID: "task6-nil-translation", Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+	auth := &cliproxyauth.Auth{ID: "task6-nil-translation", Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL, "use_chat_completions": "true"}}
 	checkUsage := task6CaptureFailureUsage(t, auth.ID)
 	defer checkUsage()
 	response, errExecute := exec.Execute(t.Context(), auth, cliproxyexecutor.Request{Model: "m", Payload: []byte(task6PatchRequest)}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})

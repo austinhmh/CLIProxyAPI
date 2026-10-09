@@ -441,7 +441,7 @@ func TestApplyPatchRepairGatewayInitializesGinTestMode(t *testing.T) {
 	}))
 	defer server.Close()
 	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
-	auth := &cliproxyauth.Auth{ID: t.Name(), Provider: exec.Identifier(), Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+	auth := &cliproxyauth.Auth{ID: t.Name(), Provider: exec.Identifier(), Attributes: map[string]string{"api_key": "test", "base_url": server.URL, "use_chat_completions": "true"}}
 	result := task6Gateway(t, exec, auth, false)
 	if result.Code != http.StatusBadGateway {
 		t.Fatalf("expected fixture error path, got %d", result.Code)

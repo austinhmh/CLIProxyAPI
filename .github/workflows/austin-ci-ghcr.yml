@@ -56,7 +56,8 @@ jobs:
           fi
 
           compiler_output="$(
-            jq -r '
+            jq -Rr '
+              fromjson? |
               select(
                 (.Action == "output" or .Action == "build-output") and
                 .Output != null and
@@ -65,15 +66,15 @@ jobs:
               .Output
             ' "${test_log}" | tail -n 160
           )"
-          failed_tests="$(jq -r 'select(.Action == "fail" and .Package != null and .Test != null) | [.Package, .Test] | @tsv' "${test_log}" | sort -u)"
-          failed_packages="$(jq -r 'select(.Action == "fail" and .Package != null) | .Package' "${test_log}" | sort -u)"
+          failed_tests="$(jq -Rr 'fromjson? | select(.Action == "fail" and .Package != null and .Test != null) | [.Package, .Test] | @tsv' "${test_log}" | sort -u)"
+          failed_packages="$(jq -Rr 'fromjson? | select(.Action == "fail" and .Package != null) | .Package' "${test_log}" | sort -u)"
           if [[ -n "${failed_packages}" ]]; then
             package_output="$(
               while IFS= read -r failed_package; do
                 printf '=== FAILED PACKAGE: %s ===\n' "${failed_package}"
-                jq -r \
+                jq -Rr \
                   --arg package "${failed_package}" \
-                  'select(.Package == $package and .Action == "output") | .Output' \
+                  'fromjson? | select(.Package == $package and .Action == "output") | .Output' \
                   "${test_log}" | tail -n 120
               done <<< "${failed_packages}"
             )"
@@ -82,10 +83,10 @@ jobs:
               failed_test_output="$(
                 while IFS=$'\t' read -r failed_package failed_test; do
                   printf '=== FAILED TEST: %s / %s ===\n' "${failed_package}" "${failed_test}"
-                  jq -r \
+                  jq -Rr \
                     --arg package "${failed_package}" \
                     --arg test "${failed_test}" \
-                    'select(.Package == $package and .Test == $test and .Action == "output") | .Output' \
+                    'fromjson? | select(.Package == $package and .Test == $test and .Action == "output") | .Output' \
                     "${test_log}" | tail -n 80
                 done <<< "${failed_tests}"
               )"

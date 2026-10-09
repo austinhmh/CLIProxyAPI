@@ -116,7 +116,7 @@ func TestOpenAICompatExecutorResponsesScannerErrorDoesNotSynthesizeCompletion(t 
 		"",
 	}, "\n")
 	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
-	auth := &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": "http://responses.test/v1", "api_key": "test"}}
+	auth := &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": "http://responses.test/v1", "api_key": "test", "use_chat_completions": "true"}}
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", issue6381RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
