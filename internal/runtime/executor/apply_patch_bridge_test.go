@@ -192,7 +192,7 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 		provider, protocol string
 		snapshot           bool
 	}{
-		{"custom-compat", "responses", false}, {"claude", "claude", false}, {"claude-oauth", "claude", false},
+		{"custom-compat", "chat", false}, {"claude", "claude", false}, {"claude-oauth", "claude", false},
 		{"gemini-interactions", "interactions", false}, {"devin", "devin", false},
 		{"xai", "responses", false}, {"meta", "responses", false}, {"kimi", "responses", false},
 		{"gemini", "gemini", true}, {"vertex", "gemini", true}, {"antigravity", "antigravity", true},
@@ -229,7 +229,7 @@ func TestApplyPatchBridgeLiveHTTPPreviewMatrix(t *testing.T) {
 			defer upstream.Close()
 			defer unblock()
 			exec := task6Executor(tc.provider)
-			if tc.protocol == "responses" && tc.provider != "custom-compat" {
+			if tc.protocol == "responses" {
 				exec = task6RepairExecutor(tc.provider)
 			} else if tc.provider == "devin" {
 				exec = NewDevinExecutor(&config.Config{})
@@ -403,7 +403,7 @@ func newApplyPatchCompatTestExecutor(t *testing.T, reply string) (*OpenAICompatE
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(server.Close)
-	return NewOpenAICompatExecutor("custom-compat", &config.Config{}), &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": server.URL + "/v1", "api_key": "test"}}, bodies
+	return task6CompatExecutor(), &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"base_url": server.URL + "/v1", "api_key": "test"}}, bodies
 }
 
 func applyPatchTestChatReply(arguments string) string {

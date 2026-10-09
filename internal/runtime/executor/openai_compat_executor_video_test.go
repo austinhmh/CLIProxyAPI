@@ -46,8 +46,9 @@ func TestOpenAICompatExecutor_VideoInput(t *testing.T) {
 				auth := &cliproxyauth.Auth{
 					Provider: "openai-compatibility",
 					Attributes: map[string]string{
-						"base_url": server.URL + "/v1",
-						"api_key":  "test-key",
+						"base_url":             server.URL + "/v1",
+						"api_key":              "test-key",
+						"use_chat_completions": "true",
 					},
 				}
 				payload := `{"model":"client-alias","messages":[{"role":"user","content":[{"type":"text","text":"Describe the videos."},{"type":"video_url","video_url":{"url":"https://example.com/clip.mp4?part=1&name=a%20b","processing":"agentic"}},{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AAECAwQ="}}]}]}`

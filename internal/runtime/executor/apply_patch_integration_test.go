@@ -89,6 +89,8 @@ func task6ProviderFixture(provider, mode, toolName string) string {
 func task6Executor(provider string) cliproxyauth.ProviderExecutor {
 	cfg := &config.Config{}
 	switch provider {
+	case "custom-compat":
+		return task6CompatExecutor()
 	case "claude", "claude-oauth":
 		return NewClaudeExecutor(cfg)
 	case "gemini":
@@ -104,6 +106,12 @@ func task6Executor(provider string) cliproxyauth.ProviderExecutor {
 	default:
 		return NewOpenAICompatExecutor(provider, cfg)
 	}
+}
+
+func task6CompatExecutor() *OpenAICompatExecutor {
+	return NewOpenAICompatExecutor("custom-compat", &config.Config{
+		OpenAICompatibility: []config.OpenAICompatibility{{Name: "custom-compat", UseChatCompletions: true}},
+	})
 }
 
 func assertTask6PatchError(t *testing.T, err error) {
@@ -567,7 +575,7 @@ func TestApplyPatchFailureStopsConsumptionAndNextAttemptIsFresh(t *testing.T) {
 		_, _ = io.WriteString(w, strings.ReplaceAll(task6ProviderFixture("custom-compat", "nonstream", "apply_patch"), `\"input\":7,\"secret\":\"RAW_SECRET\"`, `\"input\":\"valid patch\"`))
 	}))
 	defer server.Close()
-	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
+	exec := task6CompatExecutor()
 	auth := &cliproxyauth.Auth{Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
 	req := cliproxyexecutor.Request{Model: "patch-model", Payload: []byte(task6PatchRequest)}
 	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: req.Payload}
@@ -665,7 +673,7 @@ func TestApplyPatchNonStreamNativeNilWithoutErrorIs502(t *testing.T) {
 		_, _ = io.WriteString(w, task6ProviderFixture("custom-compat", "nonstream", "apply_patch"))
 	}))
 	defer server.Close()
-	exec := NewOpenAICompatExecutor("custom-compat", &config.Config{})
+	exec := task6CompatExecutor()
 	auth := &cliproxyauth.Auth{ID: "task6-nil-translation", Provider: "custom-compat", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
 	checkUsage := task6CaptureFailureUsage(t, auth.ID)
 	defer checkUsage()

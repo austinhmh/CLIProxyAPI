@@ -26,7 +26,8 @@ func TestOpenAICompatExecutor_MaxTokensNormalization(t *testing.T) {
 
 	cfg := &config.Config{
 		OpenAICompatibility: []config.OpenAICompatibility{{
-			Name: "test-compat",
+			Name:               "test-compat",
+			UseChatCompletions: true,
 			Models: []config.OpenAICompatibilityModel{
 				{
 					Name:                   "upstream-new",
@@ -242,7 +243,8 @@ func TestOpenAICompatExecutor_MaxTokensNormalizationStream(t *testing.T) {
 
 	cfg := &config.Config{
 		OpenAICompatibility: []config.OpenAICompatibility{{
-			Name: "test-compat",
+			Name:               "test-compat",
+			UseChatCompletions: true,
 			Models: []config.OpenAICompatibilityModel{
 				{
 					Name:                   "upstream-new",

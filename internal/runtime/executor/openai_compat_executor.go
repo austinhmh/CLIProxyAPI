@@ -110,7 +110,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
 	endpoint := "/chat/completions"
-	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact"
+	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact" && !e.useChatCompletions(auth, req)
 	if opts.Alt == "responses/compact" {
 		to = sdktranslator.FromString("openai-response")
 		endpoint = "/responses/compact"
@@ -436,7 +436,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
 	endpoint := "/chat/completions"
-	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact"
+	useNativeResponses := from == sdktranslator.FormatOpenAIResponse && opts.Alt != "responses/compact" && !e.useChatCompletions(auth, req)
 	if useNativeResponses {
 		to = sdktranslator.FormatOpenAIResponse
 		endpoint = "/responses"
@@ -765,7 +765,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			// Without a translator-confirmed terminal state, a clean Responses EOF
 			// without [DONE] remains a failed stream instead of completing it.
 			if responseFormat == sdktranslator.FormatOpenAIResponse {
-				streamErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before [DONE]"}
+				missingTerminal := "upstream stream closed before [DONE]"
+				if useNativeResponses {
+					missingTerminal = "upstream stream closed before a terminal response event"
+				}
+				streamErr := statusErr{code: http.StatusBadGateway, msg: missingTerminal}
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 				reporter.PublishFailure(ctx, streamErr)
 				select {
@@ -1183,6 +1187,18 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 	return
 }
 
+func (e *OpenAICompatExecutor) useChatCompletions(auth *cliproxyauth.Auth, req cliproxyexecutor.Request) bool {
+	if auth != nil {
+		if raw, exists := auth.Attributes["use_chat_completions"]; exists {
+			if enabled, errParse := strconv.ParseBool(raw); errParse == nil {
+				return enabled
+			}
+		}
+	}
+	compat := e.resolveCompatConfig(auth, req)
+	return compat != nil && compat.UseChatCompletions
+}
+
 func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req cliproxyexecutor.Request) *config.OpenAICompatibility {
 	if auth == nil || e.cfg == nil {
 		return nil
@@ -1192,6 +1208,7 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req 
 		// non-secret options belong to the credential selected for this attempt.
 		var options struct {
 			SupportPromptCacheKey bool                              `json:"support-prompt-cache-key"`
+			UseChatCompletions    bool                              `json:"use-chat-completions"`
 			Models                []config.OpenAICompatibilityModel `json:"models"`
 		}
 		present := false
@@ -1214,6 +1231,7 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req 
 			return &config.OpenAICompatibility{
 				Name:                  auth.Attributes["compat_name"],
 				SupportPromptCacheKey: options.SupportPromptCacheKey,
+				UseChatCompletions:    options.UseChatCompletions,
 				Models:                options.Models,
 			}
 		}

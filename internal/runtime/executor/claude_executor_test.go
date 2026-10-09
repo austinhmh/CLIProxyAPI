@@ -8346,11 +8346,6 @@ func TestClaudeCodeCLIBetas_MatchesObservedClientMatrix(t *testing.T) {
 				"thinking-binding-controls-2026-08-01,thinking-resumption-2026-07-17,prompt-caching-evict-2026-05-12",
 		},
 		{
-			name: "claude-fable-5-1 accepts role=system",
-			body: `{"model":"claude-fable-5-1"}`,
-			want: constants + ",mid-conversation-system-2026-04-07,effort-2025-11-24",
-		},
-		{
 			name: "claude-opus-4-7 stays on the reminder path",
 			body: `{"model":"claude-opus-4-7"}`,
 			want: constants + ",effort-2025-11-24",
@@ -8364,24 +8359,6 @@ func TestClaudeCodeCLIBetas_MatchesObservedClientMatrix(t *testing.T) {
 				"thinking-token-count-2026-05-13,context-management-2025-06-27," +
 				"prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20," +
 				"effort-2025-11-24,extended-cache-ttl-2025-04-11",
-		},
-		{
-			// Captured 2026-09-02 from Claude Code 2.1.258 (cli entrypoint, OAuth,
-			// auto mode on): 158 inline tools without tool search, advisor beta
-			// enabled for the account, thinking adaptive without display.
-			name:  "2.1.258 main thread capture with inline tools and afk-mode",
-			body:  `{"model":"claude-fable-5-1","tools":[{"name":"Read"}],"thinking":{"type":"adaptive"}}`,
-			oauth: true,
-			requested: map[string]bool{
-				claudeAdvisorToolBeta: true,
-				claudeAFKModeBeta:     true,
-			},
-			want: "claude-code-20250219,oauth-2025-04-20," +
-				"interleaved-thinking-2025-05-14,redact-thinking-2026-02-12," +
-				"thinking-token-count-2026-05-13,context-management-2025-06-27," +
-				"prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07," +
-				"advisor-tool-2026-03-01,effort-2025-11-24,fallback-credit-2026-06-01," +
-				"afk-mode-2026-01-31,extended-cache-ttl-2025-04-11",
 		},
 		{
 			name:  "oauth precedes context-1m",

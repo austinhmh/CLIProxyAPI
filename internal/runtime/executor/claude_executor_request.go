@@ -201,7 +201,7 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool,
 		if claudeIncludePerTurnTiming(body, requested) {
 			betas = append(betas, claudePerTurnTimingBeta)
 		}
-		if !isClaudeSonnet5Model(gjson.GetBytes(body, "model").String()) {
+		if !isLegacyWire && !isClaudeSonnet5Model(gjson.GetBytes(body, "model").String()) {
 			betas = append(betas, claudeMidConvToolChangesBeta)
 		}
 		if claudeIncludeInlineTools(body, requested) {

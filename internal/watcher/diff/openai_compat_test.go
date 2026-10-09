@@ -51,6 +51,12 @@ func TestDiffOpenAICompatibilityPromptCacheKey(t *testing.T) {
 	expectContains(t, changes, "provider updated: provider-a (support-prompt-cache-key false -> true)")
 }
 
+func TestDiffOpenAICompatibilityChatCompletions(t *testing.T) {
+	oldList := []config.OpenAICompatibility{{Name: "provider-a"}}
+	newList := []config.OpenAICompatibility{{Name: "provider-a", UseChatCompletions: true}}
+	expectContains(t, DiffOpenAICompatibility(oldList, newList), "provider updated: provider-a (use-chat-completions false -> true)")
+}
+
 func TestDiffOpenAICompatibilityDuplicateNames(t *testing.T) {
 	oldList := []config.OpenAICompatibility{
 		{Name: "duplicate", SupportPromptCacheKey: false},

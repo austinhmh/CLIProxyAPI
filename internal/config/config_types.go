@@ -913,6 +913,9 @@ type OpenAICompatibility struct {
 	// SupportPromptCacheKey enables derived prompt_cache_key injection for supported requests.
 	SupportPromptCacheKey bool `yaml:"support-prompt-cache-key,omitempty" json:"support-prompt-cache-key,omitempty"`
 
+	// UseChatCompletions routes Responses requests through legacy Chat Completions upstreams.
+	UseChatCompletions bool `yaml:"use-chat-completions,omitempty" json:"use-chat-completions,omitempty"`
+
 	// DisableCooling overrides the global cooling policy for this provider when set.
 	// True disables auth/model cooldowns; false explicitly enables them.
 	DisableCooling *bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`

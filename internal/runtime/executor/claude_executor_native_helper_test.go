@@ -238,10 +238,9 @@ func assertClaudeNativeHelperHeaders(t *testing.T, got, incoming http.Header) {
 			t.Fatalf("%s = %q, want preserved %q", name, gotValue, wantValue)
 		}
 	}
-	// 2.1.258 never sends x-client-request-id to CPA, so the upstream request
-	// carries the UUID CPA minted to restore the first-party shape.
-	if requestID := claudeNativeHelperHeaderValue(got, "X-Client-Request-Id"); len(requestID) != 36 {
-		t.Fatalf("X-Client-Request-Id = %q, want minted UUID", requestID)
+	// Custom upstreams preserve the caller's request ID without synthesizing a first-party header.
+	if requestID := claudeNativeHelperHeaderValue(got, "X-Client-Request-Id"); requestID != claudeNativeHelperHeaderValue(incoming, "X-Client-Request-Id") {
+		t.Fatalf("X-Client-Request-Id = %q, want the caller's value", requestID)
 	}
 }
 
