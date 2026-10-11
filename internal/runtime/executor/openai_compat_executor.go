@@ -509,6 +509,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					publishStreamError(streamErr, true)
 					return true
 				}
+				if useNativeResponses {
+					// Responses usage belongs to the validated response envelope, not the Chat chunk root.
+					detail, hasUsage := helps.ParseCodexUsage(dataPayload)
+					streamUsage.Observe(detail, hasUsage)
+				}
 			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
@@ -569,7 +574,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
-			streamUsage.ObserveOpenAIStream(line)
+			if !useNativeResponses {
+				streamUsage.ObserveOpenAIStream(line)
+			}
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {

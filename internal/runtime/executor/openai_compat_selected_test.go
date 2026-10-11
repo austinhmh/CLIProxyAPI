@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 )
@@ -159,5 +161,147 @@ func TestSelectedOpenAICompatibilityNativeResponsesTerminalEvent(t *testing.T) {
 	}
 	if requestPath != "/v1/responses" || !bytes.Contains(output.Bytes(), []byte("response.completed")) {
 		t.Fatalf("native Responses path=%q output=%q", requestPath, output.String())
+	}
+}
+
+func TestSelectedOpenAICompatibilityUsageAccounting(t *testing.T) {
+	const responsesUsage = `{"input_tokens":10,"output_tokens":6,"total_tokens":16,"input_tokens_details":{"cached_tokens":4},"output_tokens_details":{"reasoning_tokens":2}}`
+	const chatUsage = `{"prompt_tokens":10,"completion_tokens":6,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":2}}`
+	nativeResponse := `{"id":"resp_usage","object":"response","model":"selected-model","status":"completed","service_tier":"default","output":[],"usage":` + responsesUsage + `}`
+	nativeCompleted := "event: response.completed\ndata: " + `{"type":"response.completed","response":` + nativeResponse + `}` + "\n\n"
+	earlyTier := "event: response.created\ndata: " + `{"type":"response.created","response":{"id":"resp_usage","model":"selected-model","service_tier":"priority","usage":null}}` + "\n\n"
+	chatResponse := `{"id":"chatcmpl_usage","object":"chat.completion","model":"selected-model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + chatUsage + `}`
+	chatStream := "data: " + `{"id":"chatcmpl_usage","object":"chat.completion.chunk","model":"selected-model","service_tier":"default","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + chatUsage + `}` + "\n\ndata: [DONE]\n\n"
+	missingUsage := "event: response.completed\ndata: " + `{"type":"response.completed","response":{"id":"resp_usage","object":"response","model":"selected-model","status":"completed","output":[]}}` + "\n\n"
+
+	for _, testCase := range []struct {
+		name               string
+		stream             bool
+		useChatCompletions bool
+		body               string
+		wantUsage          bool
+		wantResponseTier   string
+	}{
+		{name: "native completed and final tier", stream: true, body: earlyTier + nativeCompleted, wantUsage: true, wantResponseTier: "default"},
+		{name: "native done", stream: true, body: strings.ReplaceAll(nativeCompleted, "response.completed", "response.done"), wantUsage: true, wantResponseTier: "default"},
+		{name: "native incomplete", stream: true, body: strings.ReplaceAll(nativeCompleted, "completed", "incomplete"), wantUsage: true, wantResponseTier: "default"},
+		{name: "native terminal at EOF", stream: true, body: strings.TrimSuffix(nativeCompleted, "\n\n"), wantUsage: true, wantResponseTier: "default"},
+		{name: "native missing usage and tier", stream: true, body: missingUsage},
+		{name: "native nonstream", body: nativeResponse, wantUsage: true, wantResponseTier: "default"},
+		{name: "chat stream", stream: true, useChatCompletions: true, body: chatStream, wantUsage: true, wantResponseTier: "default"},
+		{name: "chat nonstream", useChatCompletions: true, body: chatResponse, wantUsage: true, wantResponseTier: "default"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			alias := t.Name()
+			capture := &multiProviderUsageCapture{alias: alias, records: make(chan coreusage.Record, 4)}
+			coreusage.RegisterNamedPlugin(t.Name(), capture)
+			t.Cleanup(func() {
+				coreusage.RegisterNamedPlugin(t.Name(), multiProviderNoopUsagePlugin{})
+			})
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if testCase.stream {
+					writer.Header().Set("Content-Type", "text/event-stream")
+				} else {
+					writer.Header().Set("Content-Type", "application/json")
+				}
+				_, _ = io.WriteString(writer, testCase.body)
+			}))
+			t.Cleanup(upstream.Close)
+
+			configuration := &config.Config{OpenAICompatibility: []config.OpenAICompatibility{{
+				Name: "selected-provider", UseChatCompletions: testCase.useChatCompletions,
+			}}}
+			executor := NewOpenAICompatExecutor("selected-provider", configuration)
+			auth := &cliproxyauth.Auth{Provider: "openai-compatibility", Attributes: map[string]string{
+				"base_url": upstream.URL + "/v1", "api_key": "test-key", "compat_name": "selected-provider",
+			}}
+			ctx := coreusage.WithRequestedModelAlias(context.Background(), alias)
+			ctx = coreusage.WithServiceTier(ctx, "priority")
+			ctx = coreusage.WithStream(ctx, testCase.stream)
+			request := cliproxyexecutor.Request{
+				Model:   "selected-model",
+				Payload: []byte(fmt.Sprintf(`{"model":"selected-model","input":"hello","service_tier":"priority","stream":%t}`, testCase.stream)),
+			}
+			options := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Stream: testCase.stream}
+			var responsePayload []byte
+			if testCase.stream {
+				result, errExecute := executor.ExecuteStream(ctx, auth, request, options)
+				if errExecute != nil {
+					t.Fatalf("execute stream: %v", errExecute)
+				}
+				var output bytes.Buffer
+				for chunk := range result.Chunks {
+					if chunk.Err != nil {
+						t.Fatalf("stream chunk: %v", chunk.Err)
+					}
+					output.Write(chunk.Payload)
+				}
+				for _, line := range bytes.Split(output.Bytes(), []byte("\n")) {
+					if !bytes.HasPrefix(line, []byte("data:")) {
+						continue
+					}
+					payload := bytes.TrimSpace(line[len("data:"):])
+					switch gjson.GetBytes(payload, "type").String() {
+					case "response.completed", "response.done", "response.incomplete":
+						responsePayload = []byte(gjson.GetBytes(payload, "response").Raw)
+					}
+				}
+			} else {
+				result, errExecute := executor.Execute(ctx, auth, request, options)
+				if errExecute != nil {
+					t.Fatalf("execute request: %v", errExecute)
+				}
+				responsePayload = result.Payload
+			}
+			if !gjson.ValidBytes(responsePayload) {
+				t.Fatal("missing valid client response")
+			}
+
+			record := capture.await(t)
+			if record.Failed || record.ExecutorType != "OpenAICompatExecutor" || record.Stream != testCase.stream {
+				t.Fatalf("unexpected request outcome: %+v", record)
+			}
+			if record.ServiceTier != "priority" || record.ResponseServiceTier != testCase.wantResponseTier {
+				t.Fatalf("requested/response tiers = %q/%q", record.ServiceTier, record.ResponseServiceTier)
+			}
+			if tier := gjson.GetBytes(responsePayload, "service_tier").String(); tier != testCase.wantResponseTier {
+				t.Fatalf("client response tier = %q, want %q", tier, testCase.wantResponseTier)
+			}
+			actualCounts := map[string]int64{
+				"input_tokens":                           record.Detail.InputTokens,
+				"output_tokens":                          record.Detail.OutputTokens,
+				"total_tokens":                           record.Detail.TotalTokens,
+				"input_tokens_details.cached_tokens":     record.Detail.CachedTokens,
+				"output_tokens_details.reasoning_tokens": record.Detail.ReasoningTokens,
+			}
+			expectedCounts := map[string]int64{
+				"input_tokens": 10, "output_tokens": 6, "total_tokens": 16,
+				"input_tokens_details.cached_tokens": 4, "output_tokens_details.reasoning_tokens": 2,
+			}
+			clientUsage := gjson.GetBytes(responsePayload, "usage")
+			if clientUsage.Exists() != testCase.wantUsage {
+				t.Fatalf("client usage exists = %v, want %v", clientUsage.Exists(), testCase.wantUsage)
+			}
+			for field, expectedCount := range expectedCounts {
+				if !testCase.wantUsage {
+					expectedCount = 0
+				}
+				if actualCounts[field] != expectedCount {
+					t.Fatalf("record %s = %d, want %d", field, actualCounts[field], expectedCount)
+				}
+				if testCase.wantUsage && clientUsage.Get(field).Int() != expectedCount {
+					t.Fatalf("client %s = %d, want %d", field, clientUsage.Get(field).Int(), expectedCount)
+				}
+			}
+			if testCase.wantUsage && (!record.Detail.TokenBreakdown.Valid() || record.Detail.CacheReadTokens != 4) {
+				t.Fatalf("missing normalized token breakdown: %+v", record.Detail)
+			}
+
+			// FIFO delivery makes this a deterministic barrier for duplicate records.
+			coreusage.PublishRecord(ctx, coreusage.Record{Alias: alias, Model: "usage-test-barrier"})
+			if next := capture.await(t); next.Model != "usage-test-barrier" {
+				t.Fatalf("unexpected duplicate usage record: %+v", next)
+			}
+		})
 	}
 }
