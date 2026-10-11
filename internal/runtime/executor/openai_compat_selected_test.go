@@ -164,23 +164,19 @@ func TestSelectedOpenAICompatibilityNativeResponsesTerminalEvent(t *testing.T) {
 	}
 }
 
-func TestSelectedOpenAICompatibilityUsageAccounting(t *testing.T) {
+func TestSelectedOpenAICompatibilityNativeResponsesUsageAccounting(t *testing.T) {
 	const responsesUsage = `{"input_tokens":10,"output_tokens":6,"total_tokens":16,"input_tokens_details":{"cached_tokens":4},"output_tokens_details":{"reasoning_tokens":2}}`
-	const chatUsage = `{"prompt_tokens":10,"completion_tokens":6,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":2}}`
 	nativeResponse := `{"id":"resp_usage","object":"response","model":"selected-model","status":"completed","service_tier":"default","output":[],"usage":` + responsesUsage + `}`
 	nativeCompleted := "event: response.completed\ndata: " + `{"type":"response.completed","response":` + nativeResponse + `}` + "\n\n"
 	earlyTier := "event: response.created\ndata: " + `{"type":"response.created","response":{"id":"resp_usage","model":"selected-model","service_tier":"priority","usage":null}}` + "\n\n"
-	chatResponse := `{"id":"chatcmpl_usage","object":"chat.completion","model":"selected-model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + chatUsage + `}`
-	chatStream := "data: " + `{"id":"chatcmpl_usage","object":"chat.completion.chunk","model":"selected-model","service_tier":"default","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + chatUsage + `}` + "\n\ndata: [DONE]\n\n"
 	missingUsage := "event: response.completed\ndata: " + `{"type":"response.completed","response":{"id":"resp_usage","object":"response","model":"selected-model","status":"completed","output":[]}}` + "\n\n"
 
 	for _, testCase := range []struct {
-		name               string
-		stream             bool
-		useChatCompletions bool
-		body               string
-		wantUsage          bool
-		wantResponseTier   string
+		name             string
+		stream           bool
+		body             string
+		wantUsage        bool
+		wantResponseTier string
 	}{
 		{name: "native completed and final tier", stream: true, body: earlyTier + nativeCompleted, wantUsage: true, wantResponseTier: "default"},
 		{name: "native done", stream: true, body: strings.ReplaceAll(nativeCompleted, "response.completed", "response.done"), wantUsage: true, wantResponseTier: "default"},
@@ -188,8 +184,6 @@ func TestSelectedOpenAICompatibilityUsageAccounting(t *testing.T) {
 		{name: "native terminal at EOF", stream: true, body: strings.TrimSuffix(nativeCompleted, "\n\n"), wantUsage: true, wantResponseTier: "default"},
 		{name: "native missing usage and tier", stream: true, body: missingUsage},
 		{name: "native nonstream", body: nativeResponse, wantUsage: true, wantResponseTier: "default"},
-		{name: "chat stream", stream: true, useChatCompletions: true, body: chatStream, wantUsage: true, wantResponseTier: "default"},
-		{name: "chat nonstream", useChatCompletions: true, body: chatResponse, wantUsage: true, wantResponseTier: "default"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			alias := t.Name()
@@ -209,7 +203,7 @@ func TestSelectedOpenAICompatibilityUsageAccounting(t *testing.T) {
 			t.Cleanup(upstream.Close)
 
 			configuration := &config.Config{OpenAICompatibility: []config.OpenAICompatibility{{
-				Name: "selected-provider", UseChatCompletions: testCase.useChatCompletions,
+				Name: "selected-provider",
 			}}}
 			executor := NewOpenAICompatExecutor("selected-provider", configuration)
 			auth := &cliproxyauth.Auth{Provider: "openai-compatibility", Attributes: map[string]string{
