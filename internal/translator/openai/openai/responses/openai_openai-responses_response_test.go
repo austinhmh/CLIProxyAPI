@@ -25,6 +25,82 @@ func parseOpenAIResponsesSSEEvent(t *testing.T, chunk []byte) (string, gjson.Res
 	return event, gjson.Parse(dataLine)
 }
 
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ServiceTier(t *testing.T) {
+	request := []byte(`{"model":"test-model","service_tier":"priority"}`)
+	for _, testCase := range []struct {
+		name          string
+		firstField    string
+		lateField     string
+		initialTier   string
+		completedTier string
+	}{
+		{name: "confirmed priority", firstField: `,"service_tier":"priority"`, initialTier: "priority", completedTier: "priority"},
+		{name: "upstream downgrade", firstField: `,"service_tier":"default"`, initialTier: "default", completedTier: "default"},
+		{name: "upstream omitted"},
+		{name: "late tier", lateField: `,"service_tier":"default"`, completedTier: "default"},
+		{name: "late downgrade", firstField: `,"service_tier":"priority"`, lateField: `,"service_tier":"default"`, initialTier: "priority", completedTier: "default"},
+		{name: "invalid upstream type", firstField: `,"service_tier":42`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			inputChunks := []string{
+				`data: {"id":"chatcmpl_tier","object":"chat.completion.chunk","created":1` + testCase.firstField + `,"choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`,
+				`data: {"id":"chatcmpl_tier","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+				`data: {"id":"chatcmpl_tier","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}` + testCase.lateField + `}`,
+				`data: [DONE]`,
+			}
+			var converterState any
+			observedEvents := make(map[string]gjson.Result)
+			for _, inputChunk := range inputChunks {
+				for _, outputChunk := range ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "test-model", request, request, []byte(inputChunk), &converterState) {
+					event, data := parseOpenAIResponsesSSEEvent(t, outputChunk)
+					if event == "response.created" || event == "response.in_progress" || event == "response.completed" {
+						observedEvents[event] = data
+					}
+				}
+			}
+			for _, event := range []string{"response.created", "response.in_progress", "response.completed"} {
+				data, exists := observedEvents[event]
+				if !exists {
+					t.Fatalf("missing %s event", event)
+				}
+				expectedTier := testCase.initialTier
+				if event == "response.completed" {
+					expectedTier = testCase.completedTier
+				}
+				actualTier := data.Get("response.service_tier")
+				if actualTier.Exists() != (expectedTier != "") || actualTier.String() != expectedTier {
+					t.Fatalf("%s service_tier = %s, want %q", event, actualTier.Raw, expectedTier)
+				}
+			}
+		})
+	}
+}
+
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream_ServiceTier(t *testing.T) {
+	request := []byte(`{"model":"test-model","service_tier":"priority"}`)
+	for _, testCase := range []struct {
+		name         string
+		tierField    string
+		expectedTier string
+	}{
+		{name: "confirmed priority", tierField: `,"service_tier":"priority"`, expectedTier: "priority"},
+		{name: "upstream downgrade", tierField: `,"service_tier":"default"`, expectedTier: "default"},
+		{name: "upstream omitted"},
+		{name: "null", tierField: `,"service_tier":null`},
+		{name: "non-string", tierField: `,"service_tier":42`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			upstream := []byte(`{"id":"chatcmpl_tier","object":"chat.completion","created":1,"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]` + testCase.tierField + `}`)
+			var converterState any
+			output := ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(context.Background(), "test-model", request, request, upstream, &converterState)
+			actualTier := gjson.GetBytes(output, "service_tier")
+			if actualTier.Exists() != (testCase.expectedTier != "") || actualTier.String() != testCase.expectedTier {
+				t.Fatalf("service_tier = %s, want %q", actualTier.Raw, testCase.expectedTier)
+			}
+		})
+	}
+}
+
 func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ResponseCompletedWaitsForDone(t *testing.T) {
 	t.Parallel()
 

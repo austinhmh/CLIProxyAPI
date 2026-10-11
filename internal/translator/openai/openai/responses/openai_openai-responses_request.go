@@ -70,6 +70,11 @@ func convertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 			out, _ = sjson.SetBytes(out, "max_tokens", maxTokens.Value())
 		}
 	}
+	if serviceTier := root.Get("service_tier"); serviceTier.Exists() && serviceTier.Type == gjson.String {
+		if value := strings.TrimSpace(serviceTier.String()); value != "" {
+			out, _ = sjson.SetBytes(out, "service_tier", value)
+		}
+	}
 
 	// Convert instructions to system message
 	if instructions := root.Get("instructions"); instructions.Exists() {

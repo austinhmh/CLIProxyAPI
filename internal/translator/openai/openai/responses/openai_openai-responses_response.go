@@ -60,12 +60,13 @@ type oaiToResponsesState struct {
 	CustomToolNames map[string]struct{}
 	FinishReason    string
 	// usage aggregation
-	PromptTokens     int64
-	CachedTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	ReasoningTokens  int64
-	UsageSeen        bool
+	PromptTokens        int64
+	CachedTokens        int64
+	CompletionTokens    int64
+	TotalTokens         int64
+	ReasoningTokens     int64
+	UsageSeen           bool
+	ResponseServiceTier string
 }
 
 // responseIDCounter provides a process-wide unique counter for synthesized response identifiers.
@@ -101,6 +102,9 @@ func buildResponsesCompletedEvent(st *oaiToResponsesState, requestRawJSON []byte
 	completed, _ = sjson.SetBytes(completed, "response.id", st.ResponseID)
 	completed, _ = sjson.SetBytes(completed, "response.created_at", st.Created)
 	completed, _ = sjson.SetBytes(completed, "response.status", status)
+	if st.ResponseServiceTier != "" {
+		completed, _ = sjson.SetBytes(completed, "response.service_tier", st.ResponseServiceTier)
+	}
 	if len(incompleteDetails) > 0 {
 		completed, _ = sjson.SetRawBytes(completed, "response.incomplete_details", incompleteDetails)
 	}
@@ -133,9 +137,6 @@ func buildResponsesCompletedEvent(st *oaiToResponsesState, requestRawJSON []byte
 		}
 		if v := req.Get("safety_identifier"); v.Exists() {
 			completed, _ = sjson.SetBytes(completed, "response.safety_identifier", v.String())
-		}
-		if v := req.Get("service_tier"); v.Exists() {
-			completed, _ = sjson.SetBytes(completed, "response.service_tier", v.String())
 		}
 		if v := req.Get("store"); v.Exists() {
 			completed, _ = sjson.SetBytes(completed, "response.store", v.Bool())
@@ -325,6 +326,11 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		if !root.Get("choices").Exists() || !root.Get("choices").IsArray() {
 			return [][]byte{}
 		}
+		if serviceTier := root.Get("service_tier"); serviceTier.Exists() && serviceTier.Type == gjson.String {
+			if value := strings.TrimSpace(serviceTier.String()); value != "" {
+				st.ResponseServiceTier = value
+			}
+		}
 	}
 
 	if usage := root.Get("usage"); usage.Exists() {
@@ -508,6 +514,9 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		if requestModelName != "" {
 			created, _ = sjson.SetBytes(created, "response.model", requestModelName)
 		}
+		if st.ResponseServiceTier != "" {
+			created, _ = sjson.SetBytes(created, "response.service_tier", st.ResponseServiceTier)
+		}
 		out = append(out, emitRespEvent("response.created", created))
 
 		inprog := []byte(`{"type":"response.in_progress","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"in_progress","output":[]}}`)
@@ -516,6 +525,9 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		inprog, _ = sjson.SetBytes(inprog, "response.created_at", st.Created)
 		if requestModelName != "" {
 			inprog, _ = sjson.SetBytes(inprog, "response.model", requestModelName)
+		}
+		if st.ResponseServiceTier != "" {
+			inprog, _ = sjson.SetBytes(inprog, "response.service_tier", st.ResponseServiceTier)
 		}
 		out = append(out, emitRespEvent("response.in_progress", inprog))
 		st.Started = true
@@ -940,6 +952,11 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Co
 		created = time.Now().Unix()
 	}
 	resp, _ = sjson.SetBytes(resp, "created_at", created)
+	if serviceTier := root.Get("service_tier"); serviceTier.Exists() && serviceTier.Type == gjson.String {
+		if value := strings.TrimSpace(serviceTier.String()); value != "" {
+			resp, _ = sjson.SetBytes(resp, "service_tier", value)
+		}
+	}
 
 	// Echo request fields when available (aligns with streaming path behavior)
 	if len(requestRawJSON) > 0 {
@@ -977,9 +994,6 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Co
 		}
 		if v := req.Get("safety_identifier"); v.Exists() {
 			resp, _ = sjson.SetBytes(resp, "safety_identifier", v.String())
-		}
-		if v := req.Get("service_tier"); v.Exists() {
-			resp, _ = sjson.SetBytes(resp, "service_tier", v.String())
 		}
 		if v := req.Get("store"); v.Exists() {
 			resp, _ = sjson.SetBytes(resp, "store", v.Bool())

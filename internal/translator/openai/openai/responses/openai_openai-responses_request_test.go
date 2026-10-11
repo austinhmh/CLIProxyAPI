@@ -21,6 +21,38 @@ func prettyJSONForTest(raw []byte) string {
 	return out.String()
 }
 
+func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_ServiceTier(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		rawTier      string
+		expectedTier string
+	}{
+		{name: "priority", rawTier: `"priority"`, expectedTier: "priority"},
+		{name: "trim whitespace", rawTier: `"  flex  "`, expectedTier: "flex"},
+		{name: "missing"},
+		{name: "empty", rawTier: `""`},
+		{name: "blank", rawTier: `"   "`},
+		{name: "null", rawTier: `null`},
+		{name: "non-string", rawTier: `42`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			tierField := ""
+			if testCase.rawTier != "" {
+				tierField = `,"service_tier":` + testCase.rawTier
+			}
+			request := []byte(`{"input":"hello"` + tierField + `}`)
+			output, errConvert := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("test-model", request, false)
+			if errConvert != nil {
+				t.Fatalf("convert request: %v", errConvert)
+			}
+			actualTier := gjson.GetBytes(output, "service_tier")
+			if actualTier.Exists() != (testCase.expectedTier != "") || actualTier.String() != testCase.expectedTier {
+				t.Fatalf("service_tier = %s, want %q", actualTier.Raw, testCase.expectedTier)
+			}
+		})
+	}
+}
+
 func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_MergeConsecutiveFunctionCalls(t *testing.T) {
 	raw := []byte(`{
 		"input": [
