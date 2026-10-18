@@ -40,6 +40,59 @@ func TestAuthenticateManagementKey_LocalhostIPBan_BlocksCorrectKeyDuringBan(t *t
 	}
 }
 
+func TestMiddlewareExemptsOnlyTrustedForwardedManagementClient(t *testing.T) {
+	handler := &Handler{
+		cfg: &config.Config{
+			RemoteManagement: config.RemoteManagement{AllowRemote: true},
+		},
+		failedAttempts: make(map[string]*attemptInfo),
+		envSecret:      "test-secret",
+		banExemptIP:    "38.244.62.42",
+	}
+	engine := gin.New()
+	if errSetTrustedProxies := engine.SetTrustedProxies([]string{"172.20.0.1"}); errSetTrustedProxies != nil {
+		t.Fatalf("SetTrustedProxies() error = %v", errSetTrustedProxies)
+	}
+	engine.GET("/v0/management/config", handler.Middleware(), func(context *gin.Context) {
+		context.Status(http.StatusOK)
+	})
+
+	requestManagementConfig := func(remoteAddress string, forwardedClientIP string, managementKey string) int {
+		request := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
+		request.RemoteAddr = remoteAddress
+		request.Header.Set("X-Forwarded-For", forwardedClientIP)
+		request.Header.Set("Authorization", "Bearer "+managementKey)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		return response.Code
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		if status := requestManagementConfig("172.20.0.1:12345", "112.116.75.84", "wrong-secret"); status != http.StatusUnauthorized {
+			t.Fatalf("other client attempt %d: status = %d, want 401", attempt+1, status)
+		}
+	}
+	if status := requestManagementConfig("172.20.0.1:12345", "112.116.75.84", "test-secret"); status != http.StatusForbidden {
+		t.Fatalf("banned client status = %d, want 403", status)
+	}
+	for attempt := 0; attempt < 6; attempt++ {
+		if status := requestManagementConfig("172.20.0.1:12345", "38.244.62.42", "wrong-secret"); status != http.StatusUnauthorized {
+			t.Fatalf("exempt client attempt %d: status = %d, want 401", attempt+1, status)
+		}
+	}
+	if status := requestManagementConfig("172.20.0.1:12345", "38.244.62.42", "test-secret"); status != http.StatusOK {
+		t.Fatalf("exempt client with valid key: status = %d, want 200", status)
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		if status := requestManagementConfig("203.0.113.9:12345", "38.244.62.42", "wrong-secret"); status != http.StatusUnauthorized {
+			t.Fatalf("untrusted client attempt %d: status = %d, want 401", attempt+1, status)
+		}
+	}
+	if status := requestManagementConfig("203.0.113.9:12345", "38.244.62.42", "test-secret"); status != http.StatusForbidden {
+		t.Fatalf("untrusted client spoofing exempt IP: status = %d, want 403", status)
+	}
+}
+
 func TestMiddlewareSetsSupportPluginHeader(t *testing.T) {
 
 	h := &Handler{

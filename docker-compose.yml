@@ -16,7 +16,7 @@ services:
       DEPLOY: ${DEPLOY:-}
       SSL_CERT_DIR: /etc/ssl/certs:/reclaude-ca
     ports:
-      - "8317:8317"
+      - "127.0.0.1:8317:8317" # Restrict the management backend to the host Caddy proxy.
       - "8085:8085"
       - "1455:1455"
       - "54545:54545"

@@ -52,6 +52,7 @@ type Handler struct {
 	localPassword           string
 	allowRemoteOverride     bool
 	envSecret               string
+	banExemptIP             string
 	logDir                  string
 	postAuthHook            coreauth.PostAuthHook
 	postAuthPersistHook     coreauth.PostAuthHook
@@ -72,6 +73,7 @@ type configReloadSnapshot struct {
 func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Manager) *Handler {
 	envSecret, _ := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envSecret = strings.TrimSpace(envSecret)
+	banExemptIP := strings.TrimSpace(os.Getenv("MANAGEMENT_BAN_EXEMPT_IP"))
 
 	h := &Handler{
 		cfg:                 cfg,
@@ -81,6 +83,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		tokenStore:          sdkAuth.GetTokenStore(),
 		allowRemoteOverride: envSecret != "",
 		envSecret:           envSecret,
+		banExemptIP:         banExemptIP,
 	}
 	h.startAttemptCleanup()
 	return h
@@ -305,6 +308,7 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
 	if h == nil {
 		return false, http.StatusForbidden, "remote management disabled"
 	}
+	banExempt := h.banExemptIP != "" && clientIP == h.banExemptIP
 
 	cfg := h.cfg
 	var (
@@ -323,7 +327,7 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
 	now := time.Now()
 	h.attemptsMu.Lock()
 	ai := h.failedAttempts[clientIP]
-	if ai != nil && !ai.blockedUntil.IsZero() {
+	if !banExempt && ai != nil && !ai.blockedUntil.IsZero() {
 		if now.Before(ai.blockedUntil) {
 			remaining := ai.blockedUntil.Sub(now).Round(time.Second)
 			h.attemptsMu.Unlock()
@@ -340,6 +344,9 @@ func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, p
 	}
 
 	fail := func() {
+		if banExempt {
+			return
+		}
 		h.attemptsMu.Lock()
 		aip := h.failedAttempts[clientIP]
 		if aip == nil {
