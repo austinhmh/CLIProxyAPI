@@ -1165,7 +1165,7 @@ func reconcileClaudeCodeFableModelAfterPayload(
 			}
 		}
 		if !isProbeOrHelper {
-			body = applyClaudeCloakThinkingDisplay(body, payloadTouchedDisplay)
+			body = applyClaudeCloakThinkingDisplay(body, payloadTouchedDisplay, "updates")
 		}
 		return body
 	}
@@ -1181,7 +1181,7 @@ func reconcileClaudeCodeFableModelAfterPayload(
 		body, _ = sjson.DeleteBytes(body, "thinking.display")
 	}
 	if !isProbeOrHelper {
-		body = applyClaudeCloakThinkingDisplay(body, payloadTouchedDisplay)
+		body = applyClaudeCloakThinkingDisplay(body, payloadTouchedDisplay, "updates")
 	}
 
 	// Remove Reporting outcomes if CPA automatically injected it
@@ -1631,7 +1631,12 @@ func applyCloakingInternal(
 		}
 	}
 	if !isProbeOrHelper {
-		payload = applyClaudeCloakThinkingDisplay(payload, false)
+		defaultDisplay := "updates"
+		_, baseURL := claudeCreds(auth)
+		if baseURL != "" && !isAnthropicUpstreamBase(baseURL) {
+			defaultDisplay = "summarized"
+		}
+		payload = applyClaudeCloakThinkingDisplay(payload, false, defaultDisplay)
 	}
 
 	// Probes never use 1h cache in native Claude Code; ensure any caller-supplied

@@ -321,10 +321,10 @@ func claudeModelUsesProgressDisplay(model string) bool {
 	return isClaudeOpus55Model(model) || isClaudeFable51Model(model) || isClaudeSonnet5Model(model) || isClaudeSonnet55Model(model)
 }
 
-// applyClaudeCloakThinkingDisplay fills the latest CLI display only when the
-// translated caller did not choose one. An explicit summarized or omitted value
-// from Responses, Chat, or Gemini stays untouched.
-func applyClaudeCloakThinkingDisplay(body []byte, callerOwned bool) []byte {
+// applyClaudeCloakThinkingDisplay fills the upstream default only when the
+// translated caller did not choose a display mode. Explicit caller values
+// from Responses, Chat, or Gemini stay untouched.
+func applyClaudeCloakThinkingDisplay(body []byte, callerOwned bool, defaultDisplay string) []byte {
 	if callerOwned || len(body) == 0 || gjson.GetBytes(body, "thinking.display").Exists() {
 		return body
 	}
@@ -336,7 +336,7 @@ func applyClaudeCloakThinkingDisplay(body []byte, callerOwned bool) []byte {
 	default:
 		return body
 	}
-	body, _ = sjson.SetBytes(body, "thinking.display", "updates")
+	body, _ = sjson.SetBytes(body, "thinking.display", defaultDisplay)
 	return body
 }
 

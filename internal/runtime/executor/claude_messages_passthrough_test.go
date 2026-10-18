@@ -245,7 +245,7 @@ func TestApplyClaudeCloakThinkingDisplay(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := applyClaudeCloakThinkingDisplay([]byte(test.body), false)
+			got := applyClaudeCloakThinkingDisplay([]byte(test.body), false, "updates")
 			if display := gjson.GetBytes(got, "thinking.display").String(); display != test.want {
 				t.Fatalf("model=%s thinking.display = %q, want %q; body=%s", test.model, display, test.want, got)
 			}
