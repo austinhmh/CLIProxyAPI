@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
@@ -152,7 +153,7 @@ func TestClaudeExecutorThinkingDisplayUpstreamDefaults(test *testing.T) {
 					if display.String() != scenario.wantDisplay || (scenario.wantDisplay == "" && display.Exists()) {
 						subtest.Fatalf("thinking.display = %s, want %q", display.Raw, scenario.wantDisplay)
 					}
-					hasUpdatesBeta := strings.Contains(sentHeaders.Get("Anthropic-Beta"), claudeThinkingDisplayUpdatesBeta)
+					hasUpdatesBeta := strings.Contains(helps.HeaderValueCaseInsensitive(sentHeaders, "Anthropic-Beta"), claudeThinkingDisplayUpdatesBeta)
 					if hasUpdatesBeta != (scenario.wantDisplay == "updates") {
 						subtest.Fatalf("updates beta = %t for display %q", hasUpdatesBeta, scenario.wantDisplay)
 					}

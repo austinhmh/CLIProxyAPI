@@ -37,8 +37,10 @@ jobs:
             exit 1
           fi
 
-      - name: Refresh models catalog
-        run: bash .github/scripts/refresh-model-catalogs.sh
+      - name: Validate committed model catalogs
+        run: |
+          python3 -m json.tool internal/registry/models/models.json >/dev/null
+          go run -p "$(nproc)" ./cmd/validate_codex_models --file internal/registry/models/codex_client_models.json
 
       - name: Run unit tests
         shell: bash

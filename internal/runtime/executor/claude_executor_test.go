@@ -6155,7 +6155,7 @@ func TestClaudeExecutor_PayloadFableProbeOverrideKeepsBuiltinAdditions(t *testin
 	if !strings.Contains(strings.ReplaceAll(gjson.GetBytes(seenBody, "system").Raw, "\u200b", ""), "eporting outcomes") {
 		t.Fatalf("payload override must not rerun built-ins: %s", seenBody)
 	}
-	if gjson.GetBytes(seenBody, "max_tokens").Int() != 1 || gjson.GetBytes(seenBody, "thinking.display").String() != "updates" {
+	if gjson.GetBytes(seenBody, "max_tokens").Int() != 1 || gjson.GetBytes(seenBody, "thinking.display").String() != "summarized" {
 		t.Fatalf("payload override must not rerun built-ins: %s", seenBody)
 	}
 
@@ -6635,7 +6635,7 @@ func TestClaudeExecutor_PayloadFableThinkingAdaptiveToDisabledKeepsBuiltinDispla
 	}
 
 	executor := NewClaudeExecutor(cfg)
-	// Starts with adaptive thinking so CPA cloaking injects thinking.display=updates,
+	// Starts with adaptive thinking so custom-upstream cloaking injects thinking.display=summarized,
 	// then payload rule overrides thinking.type to disabled:
 	payload := []byte(`{"model":"claude-fable-5-1","thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"test"}]}`)
 	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
@@ -6647,7 +6647,7 @@ func TestClaudeExecutor_PayloadFableThinkingAdaptiveToDisabledKeepsBuiltinDispla
 	}
 
 	// The scalar override does not rerun thinking normalization.
-	if gjson.GetBytes(seenBody, "thinking.display").String() != "updates" {
+	if gjson.GetBytes(seenBody, "thinking.display").String() != "summarized" {
 		t.Fatalf("thinking.display must remain untouched by the thinking.type override, got: %s", gjson.GetBytes(seenBody, "thinking").Raw)
 	}
 	// thinking-display-updates beta header must NOT be present
