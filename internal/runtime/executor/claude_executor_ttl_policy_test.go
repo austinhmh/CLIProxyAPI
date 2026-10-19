@@ -24,26 +24,31 @@ func TestClaudeExecutorPreservesOneHourCacheTTLOnWire(t *testing.T) {
 		stream              bool
 		payload             string
 		wantAutomaticMarker bool
+		wantSystemTTLPath   string
 	}{
 		{
-			name:    "non-stream block-level TTL",
-			payload: `{"model":"claude-sonnet-5","max_tokens":16,"system":"shared prompt","messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			name:              "non-stream block-level TTL",
+			payload:           `{"model":"claude-sonnet-5","max_tokens":16,"system":[{"type":"text","text":"shared prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			wantSystemTTLPath: "system.0.cache_control.ttl",
 		},
 		{
-			name:    "stream block-level TTL",
-			stream:  true,
-			payload: `{"model":"claude-sonnet-5","max_tokens":16,"system":"shared prompt","messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			name:              "stream block-level TTL",
+			stream:            true,
+			payload:           `{"model":"claude-sonnet-5","max_tokens":16,"system":[{"type":"text","text":"shared prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			wantSystemTTLPath: "system.0.cache_control.ttl",
 		},
 		{
 			name:                "non-stream automatic TTL",
 			payload:             `{"model":"claude-sonnet-5","max_tokens":16,"cache_control":{"type":"ephemeral","ttl":"1h"},"messages":[{"role":"user","content":"hello"}]}`,
 			wantAutomaticMarker: true,
+			wantSystemTTLPath:   "system.1.cache_control.ttl",
 		},
 		{
 			name:                "stream automatic TTL",
 			stream:              true,
 			payload:             `{"model":"claude-sonnet-5","max_tokens":16,"cache_control":{"type":"ephemeral","ttl":"1h"},"messages":[{"role":"user","content":"hello"}]}`,
 			wantAutomaticMarker: true,
+			wantSystemTTLPath:   "system.1.cache_control.ttl",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -67,11 +72,11 @@ func TestClaudeExecutorPreservesOneHourCacheTTLOnWire(t *testing.T) {
 			defer server.Close()
 
 			executor := NewClaudeExecutor(&config.Config{})
-			auth := &cliproxyauth.Auth{Attributes: map[string]string{
-				"api_key":    "test-api-key",
-				"base_url":   server.URL,
-				"cloak_mode": "always",
-			}}
+			attributes := map[string]string{"api_key": "test-api-key", "base_url": server.URL}
+			if testCase.wantAutomaticMarker {
+				attributes["cloak_mode"] = "always"
+			}
+			auth := &cliproxyauth.Auth{Attributes: attributes}
 			request := cliproxyexecutor.Request{Model: "claude-sonnet-5", Payload: []byte(testCase.payload)}
 			options := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude}
 			if testCase.stream {
@@ -88,8 +93,8 @@ func TestClaudeExecutorPreservesOneHourCacheTTLOnWire(t *testing.T) {
 				t.Fatalf("Execute() error: %v", errExecute)
 			}
 
-			if got := gjson.GetBytes(upstreamBody, "system.1.cache_control.ttl").String(); got != "1h" {
-				t.Fatalf("injected system breakpoint TTL = %q, want 1h", got)
+			if got := gjson.GetBytes(upstreamBody, testCase.wantSystemTTLPath).String(); got != "1h" {
+				t.Fatalf("%s = %q, want 1h", testCase.wantSystemTTLPath, got)
 			}
 			if errValidate := validateClaudeCacheControlTTL(upstreamBody); errValidate != nil {
 				t.Fatalf("invalid final upstream TTL layout: %v", errValidate)
