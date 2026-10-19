@@ -195,10 +195,8 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		body = stripClaudeCacheControlTTL(body)
 	}
 
-	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
-	if !explicitCacheMode {
-		body = normalizeCacheControlTTL(body)
-	}
+	// Match the non-streaming TTL order before applying user payload rules.
+	body = normalizeCacheControlTTL(body)
 
 	// Extract betas from body and convert to header
 	var extraBetas []string

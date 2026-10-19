@@ -1785,11 +1785,10 @@ func upgradeClaudeCacheControlTTL(payload []byte, ttl string) []byte {
 	return payload
 }
 
-// stripClaudeCacheControlTTL removes any ttl field from cache_control blocks in payload,
+// stripClaudeCacheControlTTL removes ttl fields from block and automatic cache controls,
 // downgrading {"type":"ephemeral","ttl":"..."} to {"type":"ephemeral"}.
-// This ensures that when extended-cache-ttl-2025-04-11 is stripped (e.g. on probes,
-// subagents, or non-OAuth credentials), the body does not retain a ttl field that would
-// trigger Anthropic 400 errors or fingerprint mismatch.
+// Probes and subagents without a 1h request retain their native default cache TTL.
+// Ordinary API-key requests can still carry an explicit 1h TTL without a beta.
 func stripClaudeCacheControlTTL(payload []byte) []byte {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return payload
@@ -1808,6 +1807,11 @@ func stripClaudeCacheControlTTL(payload []byte) []byte {
 	}
 
 	forEachClaudeCacheControlBlock(payload, strip)
+	if gjson.GetBytes(payload, "cache_control.ttl").Exists() {
+		if updated, errDel := sjson.DeleteBytes(payload, "cache_control.ttl"); errDel == nil {
+			payload = updated
+		}
+	}
 	return payload
 }
 
@@ -1885,6 +1889,9 @@ func shouldEnsureCacheControl(payload []byte, cloaked, confirmedClaudeCode bool,
 	if isExplicitPromptCacheMode(append([][]byte{payload}, candidates...)...) {
 		return false
 	}
+	if gjson.GetBytes(payload, "cache_control").Exists() {
+		return false
+	}
 	return !confirmedClaudeCode && (cloaked || countCacheControls(payload) == 0)
 }
 
@@ -1933,87 +1940,72 @@ func countCacheControls(payload []byte) int {
 	return count
 }
 
-// normalizeCacheControlTTL ensures cache_control TTL values don't violate the
-// prompt-caching-scope-2026-01-05 ordering constraint: a 1h-TTL block must not
-// appear after a 5m-TTL block anywhere in the evaluation order.
-//
-// Anthropic evaluates blocks in order: tools → system (index 0..N) → messages.
-// Within each section, blocks are evaluated in array order. A 5m (default) block
-// followed by a 1h block at ANY later position is an error — including within
-// the same section (e.g. system[1]=5m then system[3]=1h).
-//
-// Strategy: walk all cache_control blocks in evaluation order. Once a 5m block
-// is seen, strip ttl from ALL subsequent 1h blocks (downgrading them to 5m).
+// normalizeCacheControlTTL uses the same ordering for legacy and adaptive paths.
 func normalizeCacheControlTTL(payload []byte) []byte {
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return payload
+	return helps.NormalizeClaudeCacheControlTTL(payload)
+}
+
+type claudeCacheControlValidationError struct {
+	statusErr
+}
+
+func (claudeCacheControlValidationError) IsRequestScoped() bool {
+	return true
+}
+
+// validateClaudeCacheControlTTL only inspects the final configured business body.
+func validateClaudeCacheControlTTL(payload []byte) error {
+	if !gjson.ValidBytes(payload) {
+		return nil
 	}
 
-	original := payload
-	seen5m := false
-	modified := false
-
-	processBlock := func(path string, obj gjson.Result) {
-		cc := obj.Get("cache_control")
-		if !cc.Exists() {
+	seenShortTTL := false
+	invalidTTLPath := ""
+	validateBlock := func(path string, block gjson.Result) {
+		cacheControl := block.Get("cache_control")
+		if !cacheControl.Exists() || invalidTTLPath != "" {
 			return
 		}
-		if !cc.IsObject() {
-			seen5m = true
+		ttlPath := "cache_control.ttl"
+		if path != "" {
+			ttlPath = path + ".cache_control.ttl"
+		}
+		ttl := cacheControl.Get("ttl")
+		if ttl.Exists() && (ttl.Type != gjson.String || (ttl.String() != "5m" && ttl.String() != "1h")) {
+			invalidTTLPath = ttlPath
 			return
 		}
-		ttl := cc.Get("ttl")
-		if ttl.Type != gjson.String || ttl.String() != "1h" {
-			seen5m = true
-			return
-		}
-		if !seen5m {
-			return
-		}
-		ttlPath := path + ".cache_control.ttl"
-		updated, errDel := sjson.DeleteBytes(payload, ttlPath)
-		if errDel != nil {
-			return
-		}
-		payload = updated
-		modified = true
-	}
-
-	tools := gjson.GetBytes(payload, "tools")
-	if tools.IsArray() {
-		tools.ForEach(func(idx, item gjson.Result) bool {
-			processBlock(fmt.Sprintf("tools.%d", int(idx.Int())), item)
-			return true
-		})
-	}
-
-	system := gjson.GetBytes(payload, "system")
-	if system.IsArray() {
-		system.ForEach(func(idx, item gjson.Result) bool {
-			processBlock(fmt.Sprintf("system.%d", int(idx.Int())), item)
-			return true
-		})
-	}
-
-	messages := gjson.GetBytes(payload, "messages")
-	if messages.IsArray() {
-		messages.ForEach(func(msgIdx, msg gjson.Result) bool {
-			content := msg.Get("content")
-			if !content.IsArray() {
-				return true
+		if ttl.String() == "1h" {
+			if seenShortTTL {
+				invalidTTLPath = ttlPath
 			}
-			content.ForEach(func(itemIdx, item gjson.Result) bool {
-				processBlock(fmt.Sprintf("messages.%d.content.%d", int(msgIdx.Int()), int(itemIdx.Int())), item)
-				return true
-			})
-			return true
-		})
+			return
+		}
+		seenShortTTL = true
+	}
+	forEachClaudeCacheControlBlock(payload, validateBlock)
+	validateBlock("", gjson.ParseBytes(payload))
+	if invalidTTLPath != "" {
+		return claudeCacheControlValidationError{statusErr{
+			code: http.StatusBadRequest,
+			msg:  fmt.Sprintf("invalid Claude cache TTL or ordering at %s", invalidTTLPath),
+		}}
 	}
 
-	if !modified {
-		return original
+	availableBreakpoints := helps.ClaudePromptCacheMaxBreakpoints
+	if thread := gjson.GetBytes(payload, "thread"); thread.Exists() && thread.Type != gjson.Null {
+		availableBreakpoints--
 	}
-	return payload
+	if gjson.GetBytes(payload, "cache_control").Exists() {
+		availableBreakpoints--
+	}
+	if countCacheControls(payload) > availableBreakpoints {
+		return claudeCacheControlValidationError{statusErr{
+			code: http.StatusBadRequest,
+			msg:  "Claude cache_control exceeds the four-breakpoint limit",
+		}}
+	}
+	return nil
 }
 
 // enforceCacheControlLimit removes excess cache_control blocks from a payload
@@ -2040,6 +2032,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 	thread := gjson.GetBytes(payload, "thread")
 	if thread.Exists() && thread.Type != gjson.Null && maxBlocks > 0 {
 		// Anthropic reserves one cache breakpoint for thread continuation.
+		maxBlocks--
+	}
+	if gjson.GetBytes(payload, "cache_control").Exists() && maxBlocks > 0 {
 		maxBlocks--
 	}
 
@@ -2069,6 +2064,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 					return true
 				}
 				if !item.Get("cache_control").Exists() {
+					return true
+				}
+				if item.Get("cache_control.ttl").String() == "1h" {
 					return true
 				}
 				path := fmt.Sprintf("system.%d.cache_control", i)
@@ -2107,6 +2105,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 				if !item.Get("cache_control").Exists() {
 					return true
 				}
+				if item.Get("cache_control.ttl").String() == "1h" {
+					return true
+				}
 				path := fmt.Sprintf("tools.%d.cache_control", i)
 				updated, errDel := sjson.DeleteBytes(payload, path)
 				if errDel != nil {
@@ -2139,6 +2140,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 				if !item.Get("cache_control").Exists() {
 					return true
 				}
+				if item.Get("cache_control.ttl").String() == "1h" {
+					return true
+				}
 				path := fmt.Sprintf("messages.%d.content.%d.cache_control", int(msgIdx.Int()), int(itemIdx.Int()))
 				updated, errDel := sjson.DeleteBytes(payload, path)
 				if errDel != nil {
@@ -2164,6 +2168,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 			if !item.Get("cache_control").Exists() {
 				return true
 			}
+			if item.Get("cache_control.ttl").String() == "1h" {
+				return true
+			}
 			path := fmt.Sprintf("system.%d.cache_control", int(idx.Int()))
 			updated, errDel := sjson.DeleteBytes(payload, path)
 			if errDel != nil {
@@ -2185,6 +2192,9 @@ func enforceCacheControlLimit(payload []byte, maxBlocks int) []byte {
 				return false
 			}
 			if !item.Get("cache_control").Exists() {
+				return true
+			}
+			if item.Get("cache_control.ttl").String() == "1h" {
 				return true
 			}
 			path := fmt.Sprintf("tools.%d.cache_control", int(idx.Int()))

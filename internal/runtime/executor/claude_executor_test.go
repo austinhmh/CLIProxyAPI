@@ -3141,7 +3141,7 @@ func TestApplyClaudeToolPrefix_SkipsBuiltinToolReference(t *testing.T) {
 	}
 }
 
-func TestNormalizeCacheControlTTL_DowngradesLaterOneHourBlocks(t *testing.T) {
+func TestNormalizeCacheControlTTL_PromotesEarlierFiveMinuteBlocks(t *testing.T) {
 	payload := []byte(`{
 		"tools": [{"name":"t1","cache_control":{"type":"ephemeral","ttl":"1h"}}],
 		"system": [{"type":"text","text":"s1","cache_control":{"type":"ephemeral"}}],
@@ -3153,8 +3153,37 @@ func TestNormalizeCacheControlTTL_DowngradesLaterOneHourBlocks(t *testing.T) {
 	if got := gjson.GetBytes(out, "tools.0.cache_control.ttl").String(); got != "1h" {
 		t.Fatalf("tools.0.cache_control.ttl = %q, want %q", got, "1h")
 	}
-	if gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").Exists() {
-		t.Fatalf("messages.0.content.0.cache_control.ttl should be removed after a default-5m block")
+	if got := gjson.GetBytes(out, "system.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("system.0.cache_control.ttl = %q, want 1h", got)
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("messages.0.content.0.cache_control.ttl = %q, want 1h", got)
+	}
+}
+
+func TestNormalizeCacheControlTTL_PromotesBreakpointsBeforeAutomaticOneHour(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-5-5","cache_control":{"type":"ephemeral","ttl":"1h"},"tools":[{"name":"Read","cache_control":{"type":"ephemeral","ttl":"5m"}}],"system":[{"type":"text","text":"system","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral","ttl":"5m"}}]}]}`)
+
+	out := normalizeCacheControlTTL(payload)
+	for _, path := range []string{"tools.0.cache_control.ttl", "system.0.cache_control.ttl", "messages.0.content.0.cache_control.ttl", "cache_control.ttl"} {
+		if got := gjson.GetBytes(out, path).String(); got != "1h" {
+			t.Errorf("%s = %q, want 1h", path, got)
+		}
+	}
+	if err := validateClaudeCacheControlTTL(out); err != nil {
+		t.Fatalf("normalized automatic cache TTL is invalid: %v", err)
+	}
+}
+
+func TestNormalizeCacheControlTTL_PreservesShorterTrailingBreakpoints(t *testing.T) {
+	payload := []byte(`{"tools":[{"cache_control":{"type":"ephemeral","ttl":"5m"}}],"system":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"content":[{"type":"text","cache_control":{"type":"ephemeral","ttl":"5m"}}]}]}`)
+
+	out := normalizeCacheControlTTL(payload)
+	if got := gjson.GetBytes(out, "tools.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("earlier tool TTL = %q, want 1h", got)
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); got != "5m" {
+		t.Fatalf("trailing message TTL = %q, want 5m", got)
 	}
 }
 
@@ -3176,8 +3205,10 @@ func TestNormalizeCacheControlTTL_PreservesKeyOrderWhenModified(t *testing.T) {
 
 	out := normalizeCacheControlTTL(payload)
 
-	if gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").Exists() {
-		t.Fatalf("messages.0.content.0.cache_control.ttl should be removed after a default-5m block")
+	for _, path := range []string{"tools.0.cache_control.ttl", "system.0.cache_control.ttl", "messages.0.content.0.cache_control.ttl"} {
+		if got := gjson.GetBytes(out, path).String(); got != "1h" {
+			t.Fatalf("%s = %q, want 1h", path, got)
+		}
 	}
 
 	outStr := string(out)
@@ -3265,6 +3296,33 @@ func TestEnforceCacheControlLimit_ReservesThreadMarker(t *testing.T) {
 
 	if got := countCacheControls(out); got != 3 {
 		t.Fatalf("cache_control count = %d, want 3 when thread is present", got)
+	}
+}
+
+func TestEnforceCacheControlLimit_ReservesAutomaticMarkerAndPreservesOneHour(t *testing.T) {
+	payload := []byte(`{"cache_control":{"type":"ephemeral","ttl":"1h"},"tools":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"cache_control":{"type":"ephemeral"}}],"messages":[{"content":[{"cache_control":{"type":"ephemeral","ttl":"1h"}},{"cache_control":{"type":"ephemeral"}}]}]}`)
+
+	out := enforceCacheControlLimit(payload, 4)
+	if got := countCacheControls(out); got != 3 {
+		t.Fatalf("body breakpoints = %d, want 3 plus the automatic breakpoint", got)
+	}
+	for _, path := range []string{"tools.0.cache_control.ttl", "messages.0.content.0.cache_control.ttl", "cache_control.ttl"} {
+		if got := gjson.GetBytes(out, path).String(); got != "1h" {
+			t.Fatalf("protected %s = %q, want 1h", path, got)
+		}
+	}
+	if err := validateClaudeCacheControlTTL(normalizeCacheControlTTL(out)); err != nil {
+		t.Fatalf("four-breakpoint request rejected: %v", err)
+	}
+}
+
+func TestValidateClaudeCacheControlTTL_RejectsFinalPayloadOrdering(t *testing.T) {
+	payload := []byte(`{"system":[{"cache_control":{"type":"ephemeral"}}],"messages":[{"content":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
+
+	err := validateClaudeCacheControlTTL(payload)
+	var statusCoder interface{ StatusCode() int }
+	if !errors.As(err, &statusCoder) || statusCoder.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("validateClaudeCacheControlTTL() error = %v, want request-level 400", err)
 	}
 }
 

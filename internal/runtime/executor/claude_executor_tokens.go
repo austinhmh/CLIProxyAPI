@@ -193,9 +193,7 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 
 	// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
 	body = enforceCacheControlLimit(body, 4)
-	if !explicitCacheMode {
-		body = normalizeCacheControlTTL(body)
-	}
+	body = normalizeCacheControlTTL(body)
 
 	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string

@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 type claudePromptCacheProgressReadCloser struct {
@@ -59,6 +60,15 @@ func (executor *ClaudeExecutor) planAdaptiveClaudePromptCache(
 	body []byte,
 ) ([]byte, *helps.ClaudePromptCachePlan) {
 	if executor == nil || executor.promptCacheRuntime == nil || executor.claudePromptCacheMode() != config.ClaudePromptCacheModeAdaptive {
+		return body, nil
+	}
+
+	// Explicit TTLs and explicit mode belong to the caller, not to the planner.
+	hasExplicitTTL := gjson.GetBytes(body, "cache_control.ttl").Exists()
+	forEachClaudeCacheControlBlock(body, func(_ string, block gjson.Result) {
+		hasExplicitTTL = hasExplicitTTL || block.Get("cache_control.ttl").Exists()
+	})
+	if isExplicitPromptCacheModeContext(ctx) || hasExplicitTTL {
 		return body, nil
 	}
 

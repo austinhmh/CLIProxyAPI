@@ -342,44 +342,39 @@ func (runtime *ClaudePromptCacheRuntime) RebuildClaudePromptCachePlan(
 	return &rebuiltPlan
 }
 
-// NormalizeClaudeCacheControlTTL enforces Anthropic's tools → system →
-// messages TTL ordering. Once a default 5-minute breakpoint appears, later
-// one-hour breakpoints are downgraded to the default TTL.
+// NormalizeClaudeCacheControlTTL enforces tools, system, messages, then automatic
+// cache-control TTL ordering. Earlier short-lived breakpoints inherit a later 1h TTL.
 func NormalizeClaudeCacheControlTTL(payload []byte) []byte {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return payload
 	}
 
 	originalPayload := payload
-	seenDefaultTTL := false
+	pendingShortTTLPaths := make([]string, 0, ClaudePromptCacheMaxBreakpoints)
 	modified := false
 	processBlock := func(path string, object gjson.Result) {
 		cacheControl := object.Get("cache_control")
-		if !cacheControl.Exists() {
-			return
-		}
 		if !cacheControl.IsObject() {
-			seenDefaultTTL = true
 			return
 		}
 		ttl := cacheControl.Get("ttl")
-		if ttl.Type != gjson.String || ttl.String() != "1h" {
-			seenDefaultTTL = true
-			return
-		}
-		if !seenDefaultTTL {
-			return
-		}
 		ttlPath := "cache_control.ttl"
 		if path != "" {
 			ttlPath = path + ".cache_control.ttl"
 		}
-		updatedPayload, errDelete := sjson.DeleteBytes(payload, ttlPath)
-		if errDelete != nil {
-			return
+		switch {
+		case !ttl.Exists() || (ttl.Type == gjson.String && ttl.String() == "5m"):
+			pendingShortTTLPaths = append(pendingShortTTLPaths, ttlPath)
+		case ttl.Type == gjson.String && ttl.String() == "1h":
+			for _, pendingPath := range pendingShortTTLPaths {
+				updatedPayload, errSet := sjson.SetBytes(payload, pendingPath, "1h")
+				if errSet == nil {
+					payload = updatedPayload
+					modified = true
+				}
+			}
+			pendingShortTTLPaths = pendingShortTTLPaths[:0]
 		}
-		payload = updatedPayload
-		modified = true
 	}
 
 	tools := gjson.GetBytes(payload, "tools")

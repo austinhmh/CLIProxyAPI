@@ -530,13 +530,15 @@ func IsClaudeSubagentRequest(headers http.Header, body []byte) bool {
 	return false
 }
 
-// ClaudePayloadHas1hTTL reports whether the request payload contains any cache_control
-// block with ttl set to "1h".
+// ClaudePayloadHas1hTTL includes both block-level and top-level automatic caching.
 func ClaudePayloadHas1hTTL(payload []byte) bool {
 	// A ttl of "1h" is the JSON string "1h"; its quotes are structural and never
 	// escaped, so a payload without that token cannot match.
 	if len(payload) == 0 || !jsonMayContainASCII(payload, `"1h"`) || !gjson.ValidBytes(payload) {
 		return false
+	}
+	if gjson.GetBytes(payload, "cache_control.ttl").String() == "1h" {
+		return true
 	}
 	has1h := false
 	checkBlock := func(item gjson.Result) bool {

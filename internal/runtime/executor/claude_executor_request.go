@@ -268,8 +268,7 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	}
 	if !isProbeOrHelper {
 		includeExtended := (oauthToken && !helps.IsClaudeSubagentRequest(nil, body)) ||
-			requested[claudeExtendedCacheTTLBeta] ||
-			helps.ClaudePayloadHas1hTTL(body)
+			requested[claudeExtendedCacheTTLBeta]
 		if includeExtended {
 			betas = append(betas, claudeExtendedCacheTTLBeta)
 		}
@@ -1082,6 +1081,9 @@ func applyClaudeHeadersWithNativeProfile(
 	if r == nil {
 		return nil
 	}
+	if errTTL := validateClaudeCacheControlTTL(body); errTTL != nil {
+		return errTTL
+	}
 	hdrDefault := func(cfgVal, fallback string) string {
 		if cfgVal != "" {
 			return cfgVal
@@ -1253,7 +1255,7 @@ func applyClaudeHeadersWithNativeProfile(
 		if helps.IsClaudeSubagentRequest(incomingHeaders, body) && !helps.ClaudeSubagentRequests1h(incomingHeaders, body) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeExtendedCacheTTLBeta)
 		}
-		if !reqProbeOrHelper && !countTokens && helps.ClaudePayloadHas1hTTL(body) {
+		if useOAuthBetas && !reqProbeOrHelper && !countTokens && helps.ClaudePayloadHas1hTTL(body) {
 			baseBetas = withClaudeExtendedCacheTTLBeta(baseBetas)
 		}
 		reqModel := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))

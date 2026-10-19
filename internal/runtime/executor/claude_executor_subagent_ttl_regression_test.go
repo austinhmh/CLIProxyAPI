@@ -230,10 +230,8 @@ func TestClaudeExecutor_SubagentWithout1hKeepsDefault5m(t *testing.T) {
 	}
 }
 
-// TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta verifies that on a standard
-// API key credential (non-OAuth), when a subagent requests 1h TTL solely in payload cache_control,
-// the executor preserves the 1h TTL and ensures extended-cache-ttl-2025-04-11 beta is supplied.
-func TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta(t *testing.T) {
+// API-key subagents keep their requested 1h TTL without inventing an obsolete beta.
+func TestClaudeExecutor_APIKeySubagentPreserves1hTTLWithoutAddingBeta(t *testing.T) {
 	var seenHeaders http.Header
 	var seenBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -289,16 +287,15 @@ func TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta(t *testing.T)
 		t.Fatalf("API key subagent body must preserve ttl: 1h, got: %s", rawBody)
 	}
 
-	// 2. Verify extended-cache-ttl beta is added to Anthropic-Beta header
+	// 2. The current API accepts 1h directly without an automatically added beta.
 	betas := seenHeaders.Get("Anthropic-Beta")
-	if !strings.Contains(betas, "extended-cache-ttl-2025-04-11") {
-		t.Fatalf("API key subagent Anthropic-Beta must include extended-cache-ttl-2025-04-11 when 1h is in payload, got: %s", betas)
+	if strings.Contains(betas, "extended-cache-ttl-2025-04-11") {
+		t.Fatalf("API key subagent unexpectedly gained extended-cache-ttl beta: %s", betas)
 	}
 }
 
-// TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta_Stream verifies streaming
-// on standard API key preserves 1h TTL and supplies extended-cache-ttl beta.
-func TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta_Stream(t *testing.T) {
+// Streaming API-key subagents use the same caller-owned 1h TTL policy.
+func TestClaudeExecutor_APIKeySubagentPreserves1hTTLWithoutAddingBeta_Stream(t *testing.T) {
 	var seenHeaders http.Header
 	var seenBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -359,9 +356,9 @@ func TestClaudeExecutor_APIKeySubagentPreserves1hTTLAndInjectsBeta_Stream(t *tes
 		t.Fatalf("API key subagent stream body must preserve ttl: 1h, got: %s", rawBody)
 	}
 
-	// 2. Verify extended-cache-ttl beta is added to Anthropic-Beta header
+	// 2. The streaming path also omits an unrequested legacy beta.
 	betas := seenHeaders.Get("Anthropic-Beta")
-	if !strings.Contains(betas, "extended-cache-ttl-2025-04-11") {
-		t.Fatalf("API key subagent Anthropic-Beta must include extended-cache-ttl-2025-04-11 when 1h is in payload on stream, got: %s", betas)
+	if strings.Contains(betas, "extended-cache-ttl-2025-04-11") {
+		t.Fatalf("streaming API key subagent unexpectedly gained extended-cache-ttl beta: %s", betas)
 	}
 }

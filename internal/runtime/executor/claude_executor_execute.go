@@ -192,11 +192,8 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		body = stripClaudeCacheControlTTL(body)
 	}
 
-	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
-	// A 1h-TTL block must not appear after a 5m-TTL block in evaluation order (tools→system→messages).
-	if !explicitCacheMode {
-		body = normalizeCacheControlTTL(body)
-	}
+	// Honor later 1h requests by upgrading earlier 5m breakpoints before payload rules.
+	body = normalizeCacheControlTTL(body)
 	// Set the built-in transport default before the explicit payload barrier.
 	// Native non-stream Haiku helper requests omit stream rather than sending
 	// false, so preserve that measured wire shape when the transport agrees.
