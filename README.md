@@ -142,7 +142,7 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 Do not run tests or compile this project on the local host, including `go test`, `go build`, `go run`, `docker build`, or `docker compose build`. GitHub Actions [austin-ci-ghcr](.github/workflows/austin-ci-ghcr.yml) performs formatting checks, tests, race checks, Go builds, and a container startup check before publishing `ghcr.io/austinhmh/cli-proxy-api-plus:sha-<commit>`.
 
-Keep credentials in the local `.env` file. Never commit, upload, or print its values. After the workflow succeeds for the exact commit, pull that published image and recreate the local service with `CLI_PROXY_IMAGE=ghcr.io/austinhmh/cli-proxy-api-plus:sha-<commit> docker compose up -d --no-build --pull never`; the existing bind-mounted configuration, authentication data, and logs must remain in place. Do not build a fallback image locally if CI or image publication fails.
+Keep credentials in the local `.env` file. Never commit, upload, or print its values. After the workflow succeeds for the exact commit, pull the published image. A host-specific `docker-compose.override.yml` with a pinned `services.cli-proxy-api.image` takes precedence over `CLI_PROXY_IMAGE`: update only that pin to the verified SHA, then run `docker compose up -d --no-build --pull never`. Without an image override, set `CLI_PROXY_IMAGE=ghcr.io/austinhmh/cli-proxy-api-plus:sha-<commit>` for that command instead. Preserve the existing bind-mounted configuration, authentication data, and logs; never build a fallback image locally if CI or image publication fails.
 
 ## Management API
 
